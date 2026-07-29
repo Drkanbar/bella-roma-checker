@@ -153,6 +153,7 @@ AGE_TESTS = {
     },
 }
 
+# Words that mark a patient-header field rather than a lab result.
 FIELD_WORDS = r"\b(NAME|ID|NO|NUMBER|AGE|SEX|GENDER|DOB|ADDRESS|PHONE|MOBILE|REF|REFERENCE|DOCTOR|DR|CLINIC|BARCODE|SAMPLE|VISIT|FILE)\b"
 
 #
@@ -279,8 +280,6 @@ st.caption("Upload the patient's reports as PDFs or photos one at a time or all 
 
 if "documents" not in st.session_state:
     st.session_state.documents = {}
-if "analyzed" not in st.session_state:
-    st.session_state.analyzed = False
 
 st.subheader("1. Patient information")
 c1, c2, c3 = st.columns(3)
@@ -308,7 +307,6 @@ with st.form("upload_form", clear_on_submit=False):
     analyze = st.form_submit_button("Analyze reports", type="primary", use_container_width=True)
 
 if analyze:
-    st.session_state.analyzed = True
     files = uploaded_files or []
     if not files and not pasted_text.strip():
         st.warning("Add at least one file or paste some report text, then press Analyze.")
@@ -409,6 +407,6 @@ if docs:
             for d in docs.values():
                 st.markdown(f"**{d['name']}**")
                 st.text(d["text"][:20000] or "(empty)")
-elif st.session_state.get("analyzed", False):
+else:
     st.warning("No readable text came out of these files. If they are photos, retake straight on in good light with the text filling the frame, or paste text into the box above.")
     
