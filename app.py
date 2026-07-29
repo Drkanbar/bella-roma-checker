@@ -22,13 +22,13 @@ with col2:
 with col3:
     patient_gender = st.selectbox("Gender", ["Female", "Male"])
 
-# 2. Required Tests List
+# 2. Required Tests List (Updated for better OCR matching)
 required_tests = {
     "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
     "Ferritin": ["FERRITIN"],
     "Iron": ["IRON", "SERUM IRON"],
-    "SGPT / ALT": ["SGPT", "ALT", "ALANINE AMINOTRANSFERASE"],
-    "SGOT / AST": ["SGOT", "AST", "ASPARTATE AMINOTRANSFERASE"],
+    "SGPT / ALT": ["SGPT", "ALT", "ALANINE AMINOTRANSFERASE", "ALANINE AMINO TRANSFERASE", "ALANINE AMINO-TRANSFERASE"],
+    "SGOT / AST": ["SGOT", "AST", "ASPARTATE AMINOTRANSFERASE", "ASPARTATE AMINO TRANSFERASE", "ASPARTATE AMINO-TRANSFERASE"],
     "Urea": ["UREA", "BUN", "BLOOD UREA"],
     "Creatinine": ["CREATININE"],
     "PT": ["PT", "PROTHROMBIN TIME", "INR"],
@@ -117,9 +117,10 @@ if uploaded_files:
 
     st.success("All files processed successfully!")
 
-    # Logic Matching
+    # Logic Matching (Ignore newlines during matching to catch split words)
     if all_extracted_text.strip():
-        extracted_text_upper = all_extracted_text.upper()
+        # Replace newlines with spaces so words split across lines are matched correctly
+        extracted_text_upper = all_extracted_text.upper().replace('\n', ' ')
         found_tests = []
         missing_tests = []
 
