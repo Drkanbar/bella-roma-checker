@@ -9,7 +9,7 @@ import io
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("النسخة الخفيفة والمستقرة لمعالجة التقارير الطبية")
+st.caption("دعم رفع عدة ملفات ومعالجتها بكل سهولة")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -55,11 +55,11 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-# 3. رفع المستندات
+# 3. رفع المستندات (يدعم عدة ملفات معاً بدون قيود معقدة)
 st.divider()
 st.subheader("📂 2. رفع تقارير التحاليل")
 uploaded_files = st.file_uploader(
-    "اختر ملف الـ PDF أو الصورة", 
+    "حدد ملفات الـ PDF أو الصور (يمكنك اختيار أكثر من ملف دفعة واحدة)", 
     type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"], 
     accept_multiple_files=True
 )
@@ -67,12 +67,12 @@ uploaded_files = st.file_uploader(
 extracted_text = ""
 
 if uploaded_files:
-    with st.spinner("جاري قراءة الملف واستخراج النصوص..."):
+    with st.spinner("جاري قراءة الملفات واستخراج النصوص..."):
         for uploaded_file in uploaded_files:
             file_bytes = uploaded_file.getvalue()
             filename = uploaded_file.name.lower()
 
-            # قراءة الـ PDF المباشر
+            # أ) قراءة ملفات الـ PDF
             if filename.endswith('.pdf'):
                 try:
                     pdf_reader = PdfReader(io.BytesIO(file_bytes))
@@ -82,7 +82,8 @@ if uploaded_files:
                             extracted_text += t + "\n"
                 except Exception:
                     pass
-            # قراءة الصور العادية
+
+            # ب) قراءة الصور
             else:
                 try:
                     image = Image.open(io.BytesIO(file_bytes))
@@ -92,7 +93,7 @@ if uploaded_files:
 
         extracted_text_upper = extracted_text.upper()
 
-        # المطابقة
+        # المطابقة مع القائمة الطبية
         found_tests = []
         missing_tests = []
 
@@ -103,9 +104,9 @@ if uploaded_files:
             else:
                 missing_tests.append(test_name)
 
-        # النتائج
+        # عرض النتائج
         st.divider()
-        st.subheader("📊 3. نتيجة التدقيق")
+        st.subheader("📊 3. نتيجة التدقيق الإجمالية")
 
         col_found, col_missing = st.columns(2)
 
@@ -128,5 +129,5 @@ if uploaded_files:
         else:
             st.success("✅ **النتيجة:** التقارير مكتملة ومستوفية 100%.")
 
-        with st.expander("🔍 معاينة النص المستخرج"):
+        with st.expander("🔍 معاينة النصوص المستخرجة من الملفات"):
             st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص قابل للقراءة.")
