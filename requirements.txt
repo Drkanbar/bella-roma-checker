@@ -2,3 +2,4 @@ streamlit
 pypdf
 pillow
 pytesseract
+pymupdf
