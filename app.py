@@ -1,19 +1,16 @@
 import streamlit as st
 from pypdf import PdfReader
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter
 import pytesseract
 import re
+import io
+import fitz  # PyMuPDF لقراءة صفحات الـ PDF المصورة
 
 # إعداد واجهة التطبيق
-st.set_page_config(page_title="مدقق فحوصاتا", layout="centered", page_icon="🩺")
-# حماية التطبيق بكلمة مرور
-password = st.text_input("🔑 أدخل كلمة المرور لاستخدام التطبيق:", type="password")
-if password != "Bella2026":  # يمكنك تغيير كلمة المرور هنا لأي كلمة تريدها
-    st.warning("يرجى إدخال كلمة المرور الصحيحة لمتابعة التدقيق.")
-    st.stop()  # يوقف تشغيل بقية التطبيق حتى إدخال كلمة المرور
+st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
-st.title("🩺 مُدقّق فحوصات ما قبل الجراحة (مُفصّل)")
-st.caption("تدقيق تفصيلي لكل تحليل على حدة حسب ورقة مستشفى ")
+st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
+st.caption("يدعم الـ PDF الرقمي والممسوح ضوئياً والصور بدقة عالية")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -25,8 +22,7 @@ with col2:
 with col3:
     patient_gender = st.selectbox("الجنس", ["أنثى", "ذكر"])
 
-# 2. القائمة المعتمدة بعد تفكيك كل تحليل إلى بند منفصل تماماً
-# 2. القائمة المعتمدة بعد تفكيك كل تحليل وإضافة كافة صيغ السكر (Glucose / RBS)
+# 2. القائمة المعتمدة للفحوصات
 required_tests = {
     "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
     "Ferritin": ["FERRITIN"],
@@ -39,10 +35,7 @@ required_tests = {
     "APTT": ["APTT", "PTT", "ACTIVATED PARTIAL"],
     "Blood Group (ABO & Rh)": ["BLOOD GROUP", "ABO", "RH TYPE", "RH(D)", "RH FACTOR"],
     "HbA1c": ["HBA1C", "GLYCOSYLATED HEMOGLOBIN"],
-    
-    # شامل لكل صيغ فحص السكر بالدم (Glucose, RBS, FBS, Blood Sugar)
     "RBS / Glucose (فحص السكر)": ["GLUCOSE", "RBS", "BLOOD GLUCOSE", "RANDOM BLOOD SUGAR", "RANDOM GLUCOSE", "FASTING GLUCOSE", "FBS"],
-    
     "TSH": ["TSH", "THYROID STIMULATING"],
     "T3": ["T3", "FREE T3", "TRIIODOTHYRONINE"],
     "T4": ["T4", "FREE T4", "THYROXINE"],
@@ -56,14 +49,21 @@ required_tests = {
     "Magnesium": ["MAGNESIUM"],
 }
 
-# شرط فحص الحمل للإناث أقل من 80 سنة
+# شروط إضافية
 if patient_gender == "أنثى" and patient_age < 80:
     required_tests["Beta HCG (فحص الحمل)"] = ["BETA HCG", "BETA-HCG", "HCG", "PREGNANCY", "B-HCG"]
 
-# شرط الأشعة وتخطيط القلب للأعمار 40 سنة فأكثر
 if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
+
+# دالة تحسين جودة الصور لقراءة أدق
+def preprocess_image(pil_img):
+    # تحويل لدرجات الرمادي وتكبير التباين
+    img = pil_img.convert('L')
+    enhancer = ImageEnhance.Contrast(img)
+    img = enhancer.enhance(2.0)
+    return img
 
 # 3. رفع المستندات
 st.divider()
@@ -73,37 +73,62 @@ uploaded_file = st.file_uploader("قم بسحب وإسقاط التقرير هن
 extracted_text = ""
 
 if uploaded_file is not None:
-    with st.spinner("جاري قراءة الملف وتدقيق التحاليل تفصيلياً..."):
-        # قراءة الـ PDF
+    with st.spinner("جاري معالجة المستند وقراءة التحاليل..."):
+        file_bytes = uploaded_file.getvalue()
+
+        # أ) ملفات الـ PDF
         if uploaded_file.name.lower().endswith('.pdf'):
-            pdf_reader = PdfReader(uploaded_file)
-            for page in pdf_reader.pages:
-                text = page.extract_text()
-                if text:
-                    extracted_text += text + "\n"
-        # قراءة الصور
+            try:
+                pdf_reader = PdfReader(io.BytesIO(file_bytes))
+                for page in pdf_reader.pages:
+                    text = page.extract_text()
+                    if text:
+                        extracted_text += text + "\n"
+            except Exception:
+                pass
+
+            # إذا كان PDF ممسوح ضوئياً
+            if not extracted_text.strip():
+                try:
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    for page in doc:
+                        pix = page.get_pixmap(dpi=200)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        img_processed = preprocess_image(img)
+                        extracted_text += pytesseract.image_to_string(img_processed, config='--psm 6') + "\n"
+                except Exception as e:
+                    st.error("تعذر قراءة الـ PDF المصور.")
+
+        # ب) الصور (JPG / PNG)
         else:
             try:
-                image = Image.open(uploaded_file)
-                extracted_text = pytesseract.image_to_string(image)
+                raw_image = Image.open(io.BytesIO(file_bytes))
+                processed_image = preprocess_image(raw_image)
+                # قراءة مع تحسين نمط النصوص الطبية
+                extracted_text = pytesseract.image_to_string(processed_image, config='--psm 6')
+                
+                # محاولة ثانية بالصورة الأصلية إن كانت القراءة قصيرة
+                if len(extracted_text.strip()) < 20:
+                    extracted_text = pytesseract.image_to_string(raw_image)
             except Exception as e:
-                st.error("تعذر قراءة النص من الصورة، يرجى التأكد من وضوح المستند.")
+                st.error("تعذر قراءة الصورة.")
 
         extracted_text_upper = extracted_text.upper()
 
-        # المطابقة واستخراج النواقص
+        # المطابقة مع الكلمات المفتاحية
         found_tests = []
         missing_tests = []
 
         for test_name, keywords in required_tests.items():
-            if any(re.search(r'\b' + re.escape(kw) + r'\b', extracted_text_upper) for kw in keywords):
+            pattern = r'(' + '|'.join([re.escape(kw) for kw in keywords]) + r')'
+            if re.search(pattern, extracted_text_upper):
                 found_tests.append(test_name)
             else:
                 missing_tests.append(test_name)
 
         # عرض النتائج
         st.divider()
-        st.subheader("📊 3. نتيجة التدقيق التفصيلي")
+        st.subheader("📊 3. نتيجة التدقيق")
 
         col_found, col_missing = st.columns(2)
 
@@ -120,9 +145,13 @@ if uploaded_file is not None:
             else:
                 st.success("🎉 جميع الفحوصات المطلوبة متوفرة بالكامل!")
 
-        # الخلاصة النهائية
+        # الخلاصة
         st.divider()
         if missing_tests:
-            st.warning(f"⚠️ **النتيجة:** الملف ينقصه {len(missing_tests)} تحليل/تحاليل فردية لاستكمال الاعتماد.")
+            st.warning(f"⚠️ **النتيجة:** ينقص التقرير {len(missing_tests)} تحليل/تحاليل لاستكمال الاعتماد.")
         else:
-            st.success("✅ **النتيجة:** الملف مكتمل 100% ومستوفي لجميع تحاليل القائمة.")
+            st.success("✅ **النتيجة:** الملف مستوفي لجميع المتطلبات 100%.")
+
+        # قسم استكشاف الأخطاء (معاينة النص القادم من الصورة)
+        with st.expander("🔍 معاينة النص الذي تم استخراجه من المستند (للتأكد)"):
+            st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص قابل للقراءة داخل الصورة.")
