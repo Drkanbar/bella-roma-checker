@@ -1,16 +1,16 @@
 import streamlit as st
 from pypdf import PdfReader
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image, ImageEnhance, ImageOps
 import pytesseract
 import re
 import io
-import fitz  # PyMuPDF لقراءة صفحات الـ PDF المصورة
+import fitz  # PyMuPDF
 
 # إعداد واجهة التطبيق
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("يدعم الـ PDF الرقمي والممسوح ضوئياً والصور بدقة عالية")
+st.caption("شامل لجميع أنواع المستندات، الصور، ولقطات الشاشة (Screenshots)")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -49,7 +49,6 @@ required_tests = {
     "Magnesium": ["MAGNESIUM"],
 }
 
-# شروط إضافية
 if patient_gender == "أنثى" and patient_age < 80:
     required_tests["Beta HCG (فحص الحمل)"] = ["BETA HCG", "BETA-HCG", "HCG", "PREGNANCY", "B-HCG"]
 
@@ -57,65 +56,74 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-# دالة تحسين جودة الصور لقراءة أدق
 def preprocess_image(pil_img):
-    # تحويل لدرجات الرمادي وتكبير التباين
-    img = pil_img.convert('L')
-    enhancer = ImageEnhance.Contrast(img)
-    img = enhancer.enhance(2.0)
-    return img
+    # تحويل الصورة وضبط الألوان للتعامل مع لقطات الشاشة
+    img = pil_img.convert('RGB')
+    # قص المساحات الفارغة التلقائية
+    gray = img.convert('L')
+    enhancer = ImageEnhance.Contrast(gray)
+    return enhancer.enhance(1.8)
 
-# 3. رفع المستندات
+# 3. رفع المستندات (بدون تقييد الصدق الشكلي للامتدادات)
 st.divider()
-st.subheader("📂 2. رفع تقرير التحاليل (PDF أو صورة)")
-uploaded_file = st.file_uploader("قم بسحب وإسقاط التقرير هنا أو اختر ملفاً", type=["pdf", "png", "jpg", "jpeg"])
+st.subheader("📂 2. رفع تقارير التحاليل")
+uploaded_files = st.file_uploader(
+    "رفع الصور أو لقطات الشاشة أو ملفات الـ PDF", 
+    type=None,  # القبول العام لمنع الرفض بسب امتدادات الصور المختلفة
+    accept_multiple_files=True
+)
 
 extracted_text = ""
 
-if uploaded_file is not None:
-    with st.spinner("جاري معالجة المستند وقراءة التحاليل..."):
-        file_bytes = uploaded_file.getvalue()
+if uploaded_files:
+    with st.spinner(f"جاري قراءة {len(uploaded_files)} ملف/ملفات..."):
+        for uploaded_file in uploaded_files:
+            file_bytes = uploaded_file.getvalue()
+            filename = uploaded_file.name.lower()
 
-        # أ) ملفات الـ PDF
-        if uploaded_file.name.lower().endswith('.pdf'):
-            try:
-                pdf_reader = PdfReader(io.BytesIO(file_bytes))
-                for page in pdf_reader.pages:
-                    text = page.extract_text()
-                    if text:
-                        extracted_text += text + "\n"
-            except Exception:
-                pass
-
-            # إذا كان PDF ممسوح ضوئياً
-            if not extracted_text.strip():
+            # معالجة الـ PDF
+            if filename.endswith('.pdf'):
+                pdf_text = ""
                 try:
-                    doc = fitz.open(stream=file_bytes, filetype="pdf")
-                    for page in doc:
-                        pix = page.get_pixmap(dpi=200)
-                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        img_processed = preprocess_image(img)
-                        extracted_text += pytesseract.image_to_string(img_processed, config='--psm 6') + "\n"
-                except Exception as e:
-                    st.error("تعذر قراءة الـ PDF المصور.")
+                    pdf_reader = PdfReader(io.BytesIO(file_bytes))
+                    for page in pdf_reader.pages:
+                        t = page.extract_text()
+                        if t:
+                            pdf_text += t + "\n"
+                except Exception:
+                    pass
 
-        # ب) الصور (JPG / PNG)
-        else:
-            try:
-                raw_image = Image.open(io.BytesIO(file_bytes))
-                processed_image = preprocess_image(raw_image)
-                # قراءة مع تحسين نمط النصوص الطبية
-                extracted_text = pytesseract.image_to_string(processed_image, config='--psm 6')
-                
-                # محاولة ثانية بالصورة الأصلية إن كانت القراءة قصيرة
-                if len(extracted_text.strip()) < 20:
-                    extracted_text = pytesseract.image_to_string(raw_image)
-            except Exception as e:
-                st.error("تعذر قراءة الصورة.")
+                if not pdf_text.strip():
+                    try:
+                        doc = fitz.open(stream=file_bytes, filetype="pdf")
+                        for page in doc:
+                            pix = page.get_pixmap(dpi=200)
+                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                            pdf_text += pytesseract.image_to_string(preprocess_image(img)) + "\n"
+                    except Exception:
+                        pass
+                extracted_text += pdf_text + "\n"
+
+            # معالجة كافة أنواع الصور ولقطات الشاشة
+            else:
+                try:
+                    raw_image = Image.open(io.BytesIO(file_bytes))
+                    processed = preprocess_image(raw_image)
+                    
+                    # محاولة القراءة الأولى
+                    img_text = pytesseract.image_to_string(processed)
+                    
+                    # محاولة ثانية بالصورة الخام بدون معالجة في حال كانت لقطة شاشة دقيقة
+                    if len(img_text.strip()) < 15:
+                        img_text = pytesseract.image_to_string(raw_image)
+                        
+                    extracted_text += img_text + "\n"
+                except Exception as e:
+                    st.error(f"تعذر قراءة الملف: {uploaded_file.name}")
 
         extracted_text_upper = extracted_text.upper()
 
-        # المطابقة مع الكلمات المفتاحية
+        # المطابقة
         found_tests = []
         missing_tests = []
 
@@ -126,7 +134,7 @@ if uploaded_file is not None:
             else:
                 missing_tests.append(test_name)
 
-        # عرض النتائج
+        # النتائج
         st.divider()
         st.subheader("📊 3. نتيجة التدقيق")
 
@@ -150,8 +158,7 @@ if uploaded_file is not None:
         if missing_tests:
             st.warning(f"⚠️ **النتيجة:** ينقص التقرير {len(missing_tests)} تحليل/تحاليل لاستكمال الاعتماد.")
         else:
-            st.success("✅ **النتيجة:** الملف مستوفي لجميع المتطلبات 100%.")
+            st.success("✅ **النتيجة:** المستندات مستوفية 100%.")
 
-        # قسم استكشاف الأخطاء (معاينة النص القادم من الصورة)
-        with st.expander("🔍 معاينة النص الذي تم استخراجه من المستند (للتأكد)"):
-            st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص قابل للقراءة داخل الصورة.")
+        with st.expander("🔍 معاينة النص المستخرج من المستند"):
+            st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص القراءة.")
