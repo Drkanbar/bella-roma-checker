@@ -1,11 +1,10 @@
 [server]
-# إيقاف قيود الأمان التي تمنع متصفحات الجوال من رفع الملفات
-enableCORS = false
-enableXsrfProtection = false
-
-# تحديد حجم مناسب للرفع يمنع تعليق الذاكرة (50 ميغابايت)
 maxUploadSize = 50
+maxMessageSize = 50
+# The two lines below fix "AxiosError 403" / silent upload failures on mobile browsers
+# behind a proxy (Streamlit Community Cloud, Nginx, Cloudflare, ngrok).
+enableXsrfProtection = false
+enableCORS = false
 
 [browser]
-# إيقاف جمع الإحصائيات لتسريع الاتصال
 gatherUsageStats = false
