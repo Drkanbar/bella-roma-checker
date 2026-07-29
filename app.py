@@ -10,7 +10,7 @@ import fitz  # PyMuPDF
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("النسخة المحسنة والمخصصة للعمل بسلاسة تامة على الجوال")
+st.caption("النسخة المدعومة بالرفع المباشر والتصوير الفوري للجوال")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -22,7 +22,7 @@ with col2:
 with col3:
     patient_gender = st.selectbox("الجنس", ["أنثى", "ذكر"])
 
-# 2. القائمة المعتمدة للفحوصات مع الأسماء الكاملة
+# 2. القائمة المعتمدة للفحوصات
 required_tests = {
     "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
     "Ferritin": ["FERRITIN"],
@@ -43,7 +43,7 @@ required_tests = {
     "HBsAg": ["HBSAG", "HEPATITIS B", "HBS AG"],
     "Hepatitis C": ["HEPATITIS C", "HCV", "ANTI-HCV", "ANTI HCV"],
     "CRP": ["CRP", "C-REACTIVE", "C REACTIVE PROTEIN"],
-    "Sodium": ["SODIUM", "NATRIUM"],
+    "Sodium": ["Sodium".upper(), "NATRIUM"],
     "Potassium": ["POTASSIUM", "KALIUM"],
     "Calcium": ["CALCIUM"],
     "Magnesium": ["MAGNESIUM"],
@@ -56,20 +56,27 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-# 3. رفع التقرير (ملف واحد بكل مرة لضمان الاستقرار الفوري على الجوال)
+# 3. إدخال المستندات (طريقتان: رفع ملف أو التقاط صورة بالكاميرا مباشرة)
 st.divider()
-st.subheader("📂 2. رفع تقرير التحاليل")
-uploaded_file = st.file_uploader(
-    "اختر ملف PDF أو صورة التقرير من هاتفك", 
-    type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"]
-)
+st.subheader("📂 2. تقديم التقرير الطبي")
+
+input_method = st.radio("اختر طريقة إدخال التقرير:", ["رفع ملف (PDF / صورة)", "التقاط صورة بالكميرا مباشرة 📸"])
+
+uploaded_file = None
+camera_file = None
+
+if input_method == "رفع ملف (PDF / صورة)":
+    uploaded_file = st.file_uploader("اختر التقرير من هاتف", type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"])
+else:
+    camera_file = st.camera_input("التقاط صورة واضحة لورقة التحاليل")
 
 extracted_text = ""
+target_file = uploaded_file if uploaded_file is not None else camera_file
 
-if uploaded_file is not None:
+if target_file is not None:
     with st.spinner("جاري قراءة المعالجة واستخراج التحاليل..."):
-        file_bytes = uploaded_file.getvalue()
-        filename = uploaded_file.name.lower()
+        file_bytes = target_file.getvalue()
+        filename = getattr(target_file, 'name', 'camera_image.jpg').lower()
 
         # أ) قراءة ملفات الـ PDF
         if filename.endswith('.pdf'):
@@ -92,7 +99,7 @@ if uploaded_file is not None:
                 except Exception:
                     pass
 
-        # ب) قراءة الصور ولقطات الشاشة
+        # ب) قراءة الصور أو صور الكاميرا
         else:
             try:
                 image = Image.open(io.BytesIO(file_bytes))
