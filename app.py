@@ -5,10 +5,10 @@ import pytesseract
 import re
 
 # إعداد واجهة التطبيق
-st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
+st.set_page_config(page_title="مدقق فحوصاتا", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة (مُفصّل)")
-st.caption("تدقيق تفصيلي لكل تحليل على حدة حسب ورقة مستشفى بيلا روما")
+st.caption("تدقيق تفصيلي لكل تحليل على حدة حسب ورقة مستشفى ")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -21,6 +21,7 @@ with col3:
     patient_gender = st.selectbox("الجنس", ["أنثى", "ذكر"])
 
 # 2. القائمة المعتمدة بعد تفكيك كل تحليل إلى بند منفصل تماماً
+# 2. القائمة المعتمدة بعد تفكيك كل تحليل وإضافة كافة صيغ السكر (Glucose / RBS)
 required_tests = {
     "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
     "Ferritin": ["FERRITIN"],
@@ -33,7 +34,10 @@ required_tests = {
     "APTT": ["APTT", "PTT", "ACTIVATED PARTIAL"],
     "Blood Group (ABO & Rh)": ["BLOOD GROUP", "ABO", "RH TYPE", "RH(D)", "RH FACTOR"],
     "HbA1c": ["HBA1C", "GLYCOSYLATED HEMOGLOBIN"],
-    "RBS (Random Blood Sugar)": ["RBS", "RANDOM BLOOD SUGAR", "RANDOM GLUCOSE"],
+    
+    # شامل لكل صيغ فحص السكر بالدم (Glucose, RBS, FBS, Blood Sugar)
+    "RBS / Glucose (فحص السكر)": ["GLUCOSE", "RBS", "BLOOD GLUCOSE", "RANDOM BLOOD SUGAR", "RANDOM GLUCOSE", "FASTING GLUCOSE", "FBS"],
+    
     "TSH": ["TSH", "THYROID STIMULATING"],
     "T3": ["T3", "FREE T3", "TRIIODOTHYRONINE"],
     "T4": ["T4", "FREE T4", "THYROXINE"],
