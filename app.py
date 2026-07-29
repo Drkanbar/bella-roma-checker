@@ -9,8 +9,8 @@ import fitz  # PyMuPDF
 # إعداد واجهة التطبيق
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
-st.title("🩺 مُدقّق فحوصات ما قبل الجراحة (وضع التشخيص)")
-st.caption("نسخة لتتبع الأخطاء بدقة على الجوال والكمبيوتر")
+st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
+st.caption("نسخة مستقرة تدعم معالجة الصور المتعددة وملفات PDF بكفاءة على الجوال")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -38,7 +38,7 @@ required_tests = {
     "RBS / Glucose (فحص السكر)": ["GLUCOSE", "RBS", "BLOOD GLUCOSE", "RANDOM BLOOD SUGAR", "RANDOM GLUCOSE", "FASTING GLUCOSE", "FBS"],
     "TSH": ["TSH", "THYROID STIMULATING"],
     "T3": ["T3", "FREE T3", "TRIIODOTHYRONINE"],
-    "T4": ["T4", "FREE T4", "Thyroxine".upper()],
+    "T4": ["T4", "FREE T4", "THYROXINE"],
     "HIV": ["HIV", "HUMAN IMMUNODEFICIENCY"],
     "HBsAg": ["HBSAG", "HEPATITIS B", "HBS AG"],
     "Hepatitis C": ["HEPATITIS C", "HCV", "ANTI-HCV", "ANTI HCV"],
@@ -56,91 +56,108 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-# 3. رفع التقرير
+# 3. رفع التقارير المتعددة
 st.divider()
-st.subheader("📂 2. رفع تقرير التحاليل")
+st.subheader("📂 2. رفع تقارير التحاليل")
 
-uploaded_file = st.file_uploader(
-    "اختر ملف PDF أو صورة التقرير", 
-    type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"]
+# السماح برفع عدة ملفات في نفس الوقت
+uploaded_files = st.file_uploader(
+    "اختر ملفات PDF أو صور متعددة من جوالك", 
+    type=["pdf", "png", "jpg", "jpeg"],
+    accept_multiple_files=True
 )
 
-extracted_text = ""
+all_extracted_text = ""
 
-if uploaded_file is not None:
-    try:
-        file_bytes = uploaded_file.getvalue()
-        filename = uploaded_file.name.lower()
-        st.info(f"📁 تم استقبال الملف: {filename} (الحجم: {len(file_bytes)} بايت)")
-
-        with st.spinner("جاري معالجة الملف واستخراج النصوص..."):
-            
-            # أ) معالجة ملفات الـ PDF
-            if filename.endswith('.pdf'):
-                try:
-                    pdf_reader = PdfReader(io.BytesIO(file_bytes))
-                    for i, page in enumerate(pdf_reader.pages):
-                        t = page.extract_text()
-                        if t:
-                            extracted_text += t + "\n"
-                    
-                    # لو الـ PDF عبارة عن صور مسح ضوئي ولم يخرج نص
-                    if not extracted_text.strip():
-                        st.write("ملاحظة: الـ PDF لا يحتوي على نصوص مباشرة، جاري استخراج الصور عبر PyMuPDF...")
-                        doc = fitz.open(stream=file_bytes, filetype="pdf")
-                        for page_num, page in enumerate(doc):
-                            pix = page.get_pixmap(dpi=150)
-                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                            ocr_res = pytesseract.image_to_string(img)
-                            extracted_text += ocr_res + "\n"
+if uploaded_files:
+    total_files = len(uploaded_files)
+    st.info(f"تم اختيار {total_files} ملف/ملفات. جاري المعالجة...")
+    
+    # شريط تقدم لمتابعة حالة المعالجة بوضوح
+    progress_bar = st.progress(0)
+    
+    for i, file in enumerate(uploaded_files):
+        file_bytes = file.getvalue()
+        filename = file.name.lower()
+        
+        # أ) معالجة ملفات الـ PDF
+        if filename.endswith('.pdf'):
+            try:
+                pdf_reader = PdfReader(io.BytesIO(file_bytes))
+                pdf_text = ""
+                for page in pdf_reader.pages:
+                    t = page.extract_text()
+                    if t:
+                        pdf_text += t + "\n"
                 
-                except Exception as e:
-                    st.error(f"❌ خطأ تقني أثناء قراءة ملف الـ PDF: {str(e)}")
+                # إذا كان الـ PDF عبارة عن صور (سكينر) ولا يوجد نص
+                if not pdf_text.strip():
+                    doc = fitz.open(stream=file_bytes, filetype="pdf")
+                    for page in doc:
+                        # تقليل الدقة قليلاً للحفاظ على ذاكرة الجوال
+                        pix = page.get_pixmap(dpi=120) 
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        pdf_text += pytesseract.image_to_string(img) + "\n"
+                    doc.close() # تفريغ الذاكرة
+                
+                all_extracted_text += pdf_text
+                
+            except Exception as e:
+                st.error(f"حدث خطأ أثناء قراءة ملف الـ PDF ({filename}): {str(e)}")
 
-            # ب) معالجة الصور العادية
-            else:
-                try:
-                    image = Image.open(io.BytesIO(file_bytes))
-                    image.thumbnail((1200, 1200))
-                    extracted_text += pytesseract.image_to_string(image) + "\n"
-                except Exception as e:
-                    st.error(f"❌ خطأ تقني أثناء معالجة الصورة: {str(e)}")
-
-        # المطابقة واستخراج النتائج إذا وُجد نص
-        if extracted_text.strip():
-            extracted_text_upper = extracted_text.upper()
-            found_tests = []
-            missing_tests = []
-
-            for test_name, keywords in required_tests.items():
-                pattern = r'(' + '|'.join([re.escape(kw) for kw in keywords]) + r')'
-                if re.search(pattern, extracted_text_upper):
-                    found_tests.append(test_name)
-                else:
-                    missing_tests.append(test_name)
-
-            st.divider()
-            st.subheader("📊 3. نتيجة التدقيق")
-
-            col_found, col_missing = st.columns(2)
-
-            with col_found:
-                st.success(f"✅ الفحوصات المتوفرة ({len(found_tests)})")
-                for item in found_tests:
-                    st.write(f"• {item}")
-
-            with col_missing:
-                if missing_tests:
-                    st.error(f"❌ الفحوصات الناقصة ({len(missing_tests)})")
-                    for item in missing_tests:
-                        st.write(f"• **{item}**")
-                else:
-                    st.success("🎉 جميع الفحوصات المطلوبة متوفرة بالكامل!")
+        # ب) معالجة الصور
         else:
-            st.warning("⚠️ تم استلام الملف ولكن لم يتم العثور على أي نص داخله (قد يكون غير مقروء أو تالف).")
+            try:
+                img = Image.open(io.BytesIO(file_bytes))
+                # تصغير الصورة إذا كانت ضخمة جداً لتجنب تعليق الجوال
+                img.thumbnail((1500, 1500))
+                all_extracted_text += pytesseract.image_to_string(img) + "\n"
+            except Exception as e:
+                st.error(f"حدث خطأ أثناء قراءة الصورة ({filename}): {str(e)}")
+        
+        # تحديث شريط التقدم بعد إنجاز كل ملف
+        progress_bar.progress((i + 1) / total_files)
 
-        with st.expander("🔍 معاينة النص الخام المستخرج"):
-            st.text(extracted_text if extracted_text.strip() else "النص فارغ تماماً.")
+    st.success("تم الانتهاء من قراءة جميع الملفات!")
 
-    except Exception as general_err:
-        st.error(f"❌ خطأ عام أثناء التعامل مع الملف: {str(general_err)}")
+    # المطابقة واستخراج النتائج
+    if all_extracted_text.strip():
+        extracted_text_upper = all_extracted_text.upper()
+        found_tests = []
+        missing_tests = []
+
+        for test_name, keywords in required_tests.items():
+            pattern = r'(' + '|'.join([re.escape(kw) for kw in keywords]) + r')'
+            if re.search(pattern, extracted_text_upper):
+                found_tests.append(test_name)
+            else:
+                missing_tests.append(test_name)
+
+        st.divider()
+        st.subheader("📊 3. نتيجة التدقيق الشاملة")
+
+        col_found, col_missing = st.columns(2)
+
+        with col_found:
+            st.success(f"✅ الفحوصات المتوفرة ({len(found_tests)})")
+            for item in found_tests:
+                st.write(f"• {item}")
+
+        with col_missing:
+            if missing_tests:
+                st.error(f"❌ الفحوصات الناقصة ({len(missing_tests)})")
+                for item in missing_tests:
+                    st.write(f"• **{item}**")
+            else:
+                st.success("🎉 جميع الفحوصات المطلوبة متوفرة بالكامل!")
+
+        st.divider()
+        if missing_tests:
+            st.warning(f"⚠️ **النتيجة:** ينقص التقارير المرفوعة {len(missing_tests)} تحليل/تحاليل لاستكمال الاعتماد.")
+        else:
+            st.success("✅ **النتيجة:** التقارير مكتملة ومستوفية لجميع متطلبات بيلا روما 100%.")
+
+        with st.expander("🔍 معاينة النص المستخرج من جميع الملفات"):
+            st.text(all_extracted_text)
+    else:
+        st.warning("⚠️ لم يتم استخراج أي نصوص من الملفات المرفوعة.")
