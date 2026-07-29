@@ -253,7 +253,7 @@ def extract_text(data: bytes, filename: str):
             text, note = read_pdf(data)
         elif ext in IMAGE_EXT:
             if ext in (".heic", ".heif") and not HEIF_SUPPORTED:
-                return "", "HEIC not supported on this server (install pillow-heif)", False
+                return "", "HEIC not supported on this server", False
             text = ocr_image(Image.open(io.BytesIO(data)))
             note = "Image OCR"
         else:
@@ -264,7 +264,7 @@ def extract_text(data: bytes, filename: str):
                     text = ocr_image(Image.open(io.BytesIO(data)))
                     note = "Image OCR"
                 except Exception:
-                    return "", f"Unsupported file type ({ext or 'no extension'})", False
+                    return "", f"Unsupported file type", False
         return text, note, True
     except TesseractNotFoundError:
         raise
@@ -275,12 +275,10 @@ def extract_text(data: bytes, filename: str):
 # UI
 #
 st.title("Pre-Surgery Lab Tests Checker")
-st.caption("Upload files one by one — they will accumulate automatically.")
+st.caption("Upload files one by one — they will be processed instantly and accumulated.")
 
 if "documents" not in st.session_state:
     st.session_state.documents = {}
-if "analyzed" not in st.session_state:
-    st.session_state.analyzed = False
 
 st.subheader("1. Patient information")
 c1, c2, c3 = st.columns(3)
@@ -292,60 +290,45 @@ with c3:
     patient_gender = st.selectbox("Gender", ["Female", "Male"])
 
 st.divider()
-st.subheader("2. Medical reports (Cumulative Upload)")
+st.subheader("2. Medical reports (Instant Upload)")
 
-with st.form("upload_form", clear_on_submit=False):
-    uploaded_files = st.file_uploader(
-        "Select files (you can add 1 or 2 files at a time)",
-        accept_multiple_files=True,
-        help="New files will be added to your previously uploaded files."
-    )
-    pasted_text = st.text_area(
-        "Or paste additional report text here",
-        height=80,
-        placeholder="CBC, Hemoglobin 12.4 g/dL..."
-    )
-    analyze = st.form_submit_button("Add & Analyze reports", type="primary", use_container_width=True)
+# رفع الملفات مباشرة بدون نموذج (Form) لتجنب قيود الموبايل
+uploaded_files = st.file_uploader(
+    "Select files (1 or 2 files at a time)",
+    accept_multiple_files=True,
+    key="file_uploader_widget"
+)
 
-if analyze:
-    st.session_state.analyzed = True
-    files = uploaded_files or []
-    if files or pasted_text.strip():
-        progress = st.progress(0.0, text="Reading files...")
-        total = max(1, len(files))
-        try:
-            for i, f in enumerate(files):
-                raw = f.getvalue()
-                digest = hashlib.md5(raw).hexdigest()
-                progress.progress(i / total, text=f"Reading {f.name} ({i + 1}/{total})")
-                if digest in st.session_state.documents:
-                    continue  # already added
-                size_mb = len(raw) / (1024 * 1024)
-                text, note, ok = extract_text(raw, f.name)
-                if size_mb > LARGE_FILE_MB:
-                    note += f" ({size_mb:.0f} MB)"
-                st.session_state.documents[digest] = {
-                    "name": f.name, "text": text, "note": note, "ok": ok
-                }
-            if pasted_text.strip():
-                pasted_digest = hashlib.md5(pasted_text.encode()).hexdigest()
-                if pasted_digest not in st.session_state.documents:
-                    st.session_state.documents[pasted_digest] = {
-                        "name": f"Pasted text ({len(st.session_state.documents)+1})", 
-                        "text": pasted_text, 
-                        "note": "Typed by hand", 
-                        "ok": True
-                    }
-            progress.progress(1.0, text="Done")
-        except TesseractNotFoundError:
-            progress.empty()
-            st.error("Tesseract OCR is not installed on the server.")
+if uploaded_files:
+    new_added = False
+    progress = st.progress(0.0, text="Reading files...")
+    total = max(1, len(uploaded_files))
+    try:
+        for i, f in enumerate(uploaded_files):
+            raw = f.getvalue()
+            digest = hashlib.md5(raw).hexdigest()
+            progress.progress(i / total, text=f"Reading {f.name}...")
+            if digest in st.session_state.documents:
+                continue
+            size_mb = len(raw) / (1024 * 1024)
+            text, note, ok = extract_text(raw, f.name)
+            if size_mb > LARGE_FILE_MB:
+                note += f" ({size_mb:.0f} MB)"
+            st.session_state.documents[digest] = {
+                "name": f.name, "text": text, "note": note, "ok": ok
+            }
+            new_added = True
+        progress.progress(1.0, text="Done")
+        if new_added:
+            st.rerun()
+    except TesseractNotFoundError:
+        progress.empty()
+        st.error("Tesseract OCR is not installed on the server.")
 
-# زر إعادة ضبط أو تفريغ الملفات المرفوعة
+# زر لتفريغ الملفات والبدء من جديد
 if st.session_state.documents:
     if st.button("🗑️ Clear all uploaded files & start over", use_container_width=True):
         st.session_state.documents = {}
-        st.session_state.analyzed = False
         st.rerun()
 
 docs = st.session_state.documents
@@ -418,6 +401,4 @@ if docs:
             for d in docs.values():
                 st.markdown(f"**{d['name']}**")
                 st.text(d["text"][:20000] or "(empty)")
-elif st.session_state.get("analyzed", False):
-    st.warning("No readable text came out of these files. Retake the photo or try another file.")
-        
+                
