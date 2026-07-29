@@ -1,16 +1,15 @@
 import streamlit as st
 from pypdf import PdfReader
-from PIL import Image, ImageEnhance
+from PIL import Image
 import pytesseract
 import re
 import io
-import fitz  # PyMuPDF
 
 # إعداد واجهة التطبيق
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("دعم رفع عدة ملفات معاً من الأندرويد والآيفون والكمبيوتر")
+st.caption("النسخة الخفيفة والمستقرة لمعالجة التقارير الطبية")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -56,16 +55,11 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-def preprocess_image(pil_img):
-    img = pil_img.convert('L')
-    enhancer = ImageEnhance.Contrast(img)
-    return enhancer.enhance(1.8)
-
-# 3. رفع المستندات (مع تحديد الأنواع الصريحة لحل مشكلة اختيار أندرويد)
+# 3. رفع المستندات
 st.divider()
 st.subheader("📂 2. رفع تقارير التحاليل")
 uploaded_files = st.file_uploader(
-    "اضغط هنا لاختيار ملفات الـ PDF أو الصور (يمكنك تحديد عدة ملفات)", 
+    "اختر ملف الـ PDF أو الصورة", 
     type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"], 
     accept_multiple_files=True
 )
@@ -73,47 +67,26 @@ uploaded_files = st.file_uploader(
 extracted_text = ""
 
 if uploaded_files:
-    with st.spinner(f"جاري قراءة وتدقيق {len(uploaded_files)} ملف/ملفات..."):
+    with st.spinner("جاري قراءة الملف واستخراج النصوص..."):
         for uploaded_file in uploaded_files:
             file_bytes = uploaded_file.getvalue()
             filename = uploaded_file.name.lower()
 
-            # أ) التعامل مع الـ PDF
+            # قراءة الـ PDF المباشر
             if filename.endswith('.pdf'):
-                pdf_text = ""
                 try:
                     pdf_reader = PdfReader(io.BytesIO(file_bytes))
                     for page in pdf_reader.pages:
                         t = page.extract_text()
                         if t:
-                            pdf_text += t + "\n"
+                            extracted_text += t + "\n"
                 except Exception:
                     pass
-
-                # إذا كان PDF ممسوحاً ضوئياً كصورة
-                if not pdf_text.strip():
-                    try:
-                        doc = fitz.open(stream=file_bytes, filetype="pdf")
-                        for page in doc:
-                            pix = page.get_pixmap(dpi=200)
-                            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                            pdf_text += pytesseract.image_to_string(preprocess_image(img)) + "\n"
-                    except Exception:
-                        pass
-
-                extracted_text += pdf_text + "\n"
-
-            # ب) التعامل مع الصور
+            # قراءة الصور العادية
             else:
                 try:
-                    raw_image = Image.open(io.BytesIO(file_bytes))
-                    processed = preprocess_image(raw_image)
-                    img_text = pytesseract.image_to_string(processed)
-                    
-                    if len(img_text.strip()) < 15:
-                        img_text = pytesseract.image_to_string(raw_image)
-                        
-                    extracted_text += img_text + "\n"
+                    image = Image.open(io.BytesIO(file_bytes))
+                    extracted_text += pytesseract.image_to_string(image) + "\n"
                 except Exception:
                     pass
 
@@ -130,9 +103,9 @@ if uploaded_files:
             else:
                 missing_tests.append(test_name)
 
-        # عرض النتائج
+        # النتائج
         st.divider()
-        st.subheader("📊 3. نتيجة التدقيق الإجمالية")
+        st.subheader("📊 3. نتيجة التدقيق")
 
         col_found, col_missing = st.columns(2)
 
@@ -149,12 +122,11 @@ if uploaded_files:
             else:
                 st.success("🎉 جميع الفحوصات المطلوبة متوفرة بالكامل!")
 
-        # الخلاصة
         st.divider()
         if missing_tests:
-            st.warning(f"⚠️ **النتيجة:** ينقص التقارير المرفوعة {len(missing_tests)} تحليل/تحاليل لاستكمال الاعتماد.")
+            st.warning(f"⚠️ **النتيجة:** ينقص التقرير {len(missing_tests)} تحليل/تحاليل لاستكمال الاعتماد.")
         else:
-            st.success("✅ **النتيجة:** التقارير مستوفية لجميع متطلبات بيلا روما 100%.")
+            st.success("✅ **النتيجة:** التقارير مكتملة ومستوفية 100%.")
 
-        with st.expander("🔍 معاينة جميع النصوص المستخرجة من الملفات"):
+        with st.expander("🔍 معاينة النص المستخرج"):
             st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص قابل للقراءة.")
