@@ -4,11 +4,11 @@ from PIL import Image
 import pytesseract
 import re
 
-# إعداد واجهة التطبيق للعمل على الشاشات الكبيرة والموبايل
+# إعداد واجهة التطبيق
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
-st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("محتوى القائمة مطابق تماماً لنماذج مستشفى بيلا روما التخصصي (Bella Roma)")
+st.title("🩺 مُدقّق فحوصات ما قبل الجراحة (مُفصّل)")
+st.caption("تدقيق تفصيلي لكل تحليل على حدة حسب ورقة مستشفى بيلا روما")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -20,23 +20,31 @@ with col2:
 with col3:
     patient_gender = st.selectbox("الجنس", ["أنثى", "ذكر"])
 
-# 2. القائمة المعتمدة المأخوذة بدقة من ورقة Bella Roma Specialty Hospital
+# 2. القائمة المعتمدة بعد تفكيك كل تحليل إلى بند منفصل تماماً
 required_tests = {
-    "CBC, Ferritin, Iron": ["CBC", "FERRITIN", "IRON", "HEMOGLOBIN", "HAEMOGLOBIN", "MCV", "MCH", "PLATELET"],
-    "SGPT, SGOT": ["SGPT", "SGOT", "ALT", "AST", "ALANINE", "ASPARTATE"],
-    "Urea, Creatinine": ["UREA", "CREATININE", "BUN"],
-    "PT, APTT": ["PT", "APTT", "PTT", "INR", "PROTHROMBIN"],
-    "Blood Group (ABO & Rh Type)": ["BLOOD GROUP", "ABO", "RH TYPE", "RH(D)", "RH FACTOR"],
-    "HbA1c, RBS": ["HBA1C", "RBS", "RANDOM BLOOD SUGAR", "GLYCOSYLATED", "RANDOM GLUCOSE", "GLUCOSE"],
-    "Thyroid Profile (TSH, T3, T4)": ["TSH", "T3", "T4", "FREE T3", "FREE T4", "THYROID"],
+    "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
+    "Ferritin": ["FERRITIN"],
+    "Iron": ["IRON", "SERUM IRON"],
+    "SGPT (ALT)": ["SGPT", "ALT", "ALANINE AMINOTRANSFERASE"],
+    "SGOT (AST)": ["SGOT", "AST", "ASPARTATE AMINOTRANSFERASE"],
+    "Urea": ["UREA", "BUN", "BLOOD UREA"],
+    "Creatinine": ["CREATININE"],
+    "PT": ["PT", "PROTHROMBIN TIME", "INR"],
+    "APTT": ["APTT", "PTT", "ACTIVATED PARTIAL"],
+    "Blood Group (ABO & Rh)": ["BLOOD GROUP", "ABO", "RH TYPE", "RH(D)", "RH FACTOR"],
+    "HbA1c": ["HBA1C", "GLYCOSYLATED HEMOGLOBIN"],
+    "RBS (Random Blood Sugar)": ["RBS", "RANDOM BLOOD SUGAR", "RANDOM GLUCOSE"],
+    "TSH": ["TSH", "THYROID STIMULATING"],
+    "T3": ["T3", "FREE T3", "TRIIODOTHYRONINE"],
+    "T4": ["T4", "FREE T4", "THYROXINE"],
     "HIV": ["HIV", "HUMAN IMMUNODEFICIENCY"],
     "HBsAg": ["HBSAG", "HEPATITIS B", "HBS AG"],
     "Hepatitis C": ["HEPATITIS C", "HCV", "ANTI-HCV", "ANTI HCV"],
     "CRP": ["CRP", "C-REACTIVE", "C REACTIVE PROTEIN"],
-    "Sodium": ["SODIUM", "NA", "NA+"],
-    "Potassium": ["POTASSIUM", "K", "K+"],
-    "Calcium": ["CALCIUM", "CA", "CA++"],
-    "Magnesium": ["MAGNESIUM", "MG"],
+    "Sodium": ["SODIUM", "NATRIUM"],
+    "Potassium": ["POTASSIUM", "KALIUM"],
+    "Calcium": ["CALCIUM"],
+    "Magnesium": ["MAGNESIUM"],
 }
 
 # شرط فحص الحمل للإناث أقل من 80 سنة
@@ -56,7 +64,7 @@ uploaded_file = st.file_uploader("قم بسحب وإسقاط التقرير هن
 extracted_text = ""
 
 if uploaded_file is not None:
-    with st.spinner("جاري قراءة الملف وتدقيق التحاليل..."):
+    with st.spinner("جاري قراءة الملف وتدقيق التحاليل تفصيلياً..."):
         # قراءة الـ PDF
         if uploaded_file.name.lower().endswith('.pdf'):
             pdf_reader = PdfReader(uploaded_file)
@@ -86,12 +94,12 @@ if uploaded_file is not None:
 
         # عرض النتائج
         st.divider()
-        st.subheader("📊 3. نتيجة التدقيق والجاهزية")
+        st.subheader("📊 3. نتيجة التدقيق التفصيلي")
 
         col_found, col_missing = st.columns(2)
 
         with col_found:
-            st.success(f"✅ الفحوصات المكتشفة ({len(found_tests)})")
+            st.success(f"✅ الفحوصات المتوفرة ({len(found_tests)})")
             for item in found_tests:
                 st.write(f"• {item}")
 
@@ -101,11 +109,11 @@ if uploaded_file is not None:
                 for item in missing_tests:
                     st.write(f"• **{item}**")
             else:
-                st.success("🎉 جميع فحوصات القائمة متوفرة بالكامل!")
+                st.success("🎉 جميع الفحوصات المطلوبة متوفرة بالكامل!")
 
         # الخلاصة النهائية
         st.divider()
         if missing_tests:
-            st.warning(f"⚠️ **النتيجة:** الملف ينقصه {len(missing_tests)} فحص/فحوصات لاستكمال الاعتماد.")
+            st.warning(f"⚠️ **النتيجة:** الملف ينقصه {len(missing_tests)} تحليل/تحاليل فردية لاستكمال الاعتماد.")
         else:
-            st.success("✅ **النتيجة:** الملف مكتمل 100% ومستوفي لجميع متطلبات بيلا روما.")
+            st.success("✅ **النتيجة:** الملف مكتمل 100% ومستوفي لجميع تحاليل القائمة.")
