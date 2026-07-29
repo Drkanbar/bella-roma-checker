@@ -1,15 +1,21 @@
 import streamlit as st
 from pypdf import PdfReader
-from PIL import Image
-import pytesseract
 import re
 import io
+
+# محاولة تحميل مكتبات الصور بشكل آمن لكي لا ينهار التطبيق
+try:
+    from PIL import Image
+    import pytesseract
+    OCR_AVAILABLE = True
+except ImportError:
+    OCR_AVAILABLE = False
 
 # إعداد واجهة التطبيق
 st.set_page_config(page_title="مدقق فحوصات بيلا روما", layout="centered", page_icon="🩺")
 
 st.title("🩺 مُدقّق فحوصات ما قبل الجراحة")
-st.caption("دعم رفع عدة ملفات ومعالجتها بكل سهولة")
+st.caption("نسخة مستقرة وآمنة لتدقيق التقارير الطبية")
 
 # 1. بيانات المريض
 st.subheader("📋 1. بيانات المريض")
@@ -21,7 +27,7 @@ with col2:
 with col3:
     patient_gender = st.selectbox("الجنس", ["أنثى", "ذكر"])
 
-# 2. القائمة المعتمدة للفحوصات
+# 2. القائمة الطبية المعتمدة
 required_tests = {
     "CBC": ["CBC", "HEMOGLOBIN", "HAEMOGLOBIN", "COMPLETE BLOOD COUNT", "PLATELET", "WBC"],
     "Ferritin": ["FERRITIN"],
@@ -55,11 +61,11 @@ if patient_age >= 40:
     required_tests["Chest X-ray (أشعة الصدر)"] = ["CHEST X-RAY", "CHEST XRAY", "CXR", "CHEST RADIOGRAPH"]
     required_tests["ECG with fitness clearance (تخطيط القلب)"] = ["ECG", "EKG", "ELECTROCARDIOGRAM", "CARDIOLOGY"]
 
-# 3. رفع المستندات (يدعم عدة ملفات معاً بدون قيود معقدة)
+# 3. رفع المستندات
 st.divider()
 st.subheader("📂 2. رفع تقارير التحاليل")
 uploaded_files = st.file_uploader(
-    "حدد ملفات الـ PDF أو الصور (يمكنك اختيار أكثر من ملف دفعة واحدة)", 
+    "اختر ملف الـ PDF أو الصورة", 
     type=["pdf", "PDF", "png", "PNG", "jpg", "JPG", "jpeg", "JPEG"], 
     accept_multiple_files=True
 )
@@ -67,12 +73,12 @@ uploaded_files = st.file_uploader(
 extracted_text = ""
 
 if uploaded_files:
-    with st.spinner("جاري قراءة الملفات واستخراج النصوص..."):
+    with st.spinner("جاري قراءة الملفات..."):
         for uploaded_file in uploaded_files:
             file_bytes = uploaded_file.getvalue()
             filename = uploaded_file.name.lower()
 
-            # أ) قراءة ملفات الـ PDF
+            # قراءة ملفات الـ PDF بأمان
             if filename.endswith('.pdf'):
                 try:
                     pdf_reader = PdfReader(io.BytesIO(file_bytes))
@@ -80,20 +86,24 @@ if uploaded_files:
                         t = page.extract_text()
                         if t:
                             extracted_text += t + "\n"
-                except Exception:
-                    pass
+                except Exception as e:
+                    st.warning(f"تعذر قراءة ملف الـ PDF: {uploaded_file.name}")
 
-            # ب) قراءة الصور
+            # قراءة الصور بأمان
             else:
-                try:
-                    image = Image.open(io.BytesIO(file_bytes))
-                    extracted_text += pytesseract.image_to_string(image) + "\n"
-                except Exception:
-                    pass
+                if OCR_AVAILABLE:
+                    try:
+                        image = Image.open(io.BytesIO(file_bytes))
+                        text = pytesseract.image_to_string(image)
+                        extracted_text += text + "\n"
+                    except Exception as e:
+                        st.warning(f"تعذر قراءة الصورة (تحقق من تثبيت Tesseract): {uploaded_file.name}")
+                else:
+                    st.error("مكتبة قراءة الصور غير مفعلة على السيرفر.")
 
         extracted_text_upper = extracted_text.upper()
 
-        # المطابقة مع القائمة الطبية
+        # المطابقة مع الفحوصات المطلوبة
         found_tests = []
         missing_tests = []
 
@@ -106,7 +116,7 @@ if uploaded_files:
 
         # عرض النتائج
         st.divider()
-        st.subheader("📊 3. نتيجة التدقيق الإجمالية")
+        st.subheader("📊 3. نتيجة التدقيق")
 
         col_found, col_missing = st.columns(2)
 
@@ -129,5 +139,5 @@ if uploaded_files:
         else:
             st.success("✅ **النتيجة:** التقارير مكتملة ومستوفية 100%.")
 
-        with st.expander("🔍 معاينة النصوص المستخرجة من الملفات"):
-            st.text(extracted_text if extracted_text.strip() else "لم يتم العثور على أي نص قابل للقراءة.")
+        with st.expander("🔍 معاينة النص المستخرج"):
+            st.text(extracted_text if extracted_text.strip() else "لم يتم استخراج أي نص من الملفات المحددة.")
