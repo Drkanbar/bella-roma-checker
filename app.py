@@ -153,7 +153,6 @@ AGE_TESTS = {
     },
 }
 
-# Words that mark a patient-header field rather than a lab result.
 FIELD_WORDS = r"\b(NAME|ID|NO|NUMBER|AGE|SEX|GENDER|DOB|ADDRESS|PHONE|MOBILE|REF|REFERENCE|DOCTOR|DR|CLINIC|BARCODE|SAMPLE|VISIT|FILE)\b"
 
 #
@@ -276,10 +275,12 @@ def extract_text(data: bytes, filename: str):
 # UI
 #
 st.title("Pre-Surgery Lab Tests Checker")
-st.caption("Upload the patient's reports as PDFs or photos one at a time or all at once.")
+st.caption("Upload files one by one — they will accumulate automatically.")
 
 if "documents" not in st.session_state:
     st.session_state.documents = {}
+if "analyzed" not in st.session_state:
+    st.session_state.analyzed = False
 
 st.subheader("1. Patient information")
 c1, c2, c3 = st.columns(3)
@@ -291,27 +292,25 @@ with c3:
     patient_gender = st.selectbox("Gender", ["Female", "Male"])
 
 st.divider()
-st.subheader("2. Medical reports")
+st.subheader("2. Medical reports (Cumulative Upload)")
 
 with st.form("upload_form", clear_on_submit=False):
     uploaded_files = st.file_uploader(
-        "Select PDFs or photos",
+        "Select files (you can add 1 or 2 files at a time)",
         accept_multiple_files=True,
-        help="PDF, JPG, PNG, WEBP, TIFF and HEIC all work. Select several at once."
+        help="New files will be added to your previously uploaded files."
     )
     pasted_text = st.text_area(
-        "Or paste the report text here (fallback if your browser blocks uploads)",
-        height=100,
-        placeholder="CBC, Hemoglobin 12.4 g/dL, Ferritin 45..."
+        "Or paste additional report text here",
+        height=80,
+        placeholder="CBC, Hemoglobin 12.4 g/dL..."
     )
-    analyze = st.form_submit_button("Analyze reports", type="primary", use_container_width=True)
+    analyze = st.form_submit_button("Add & Analyze reports", type="primary", use_container_width=True)
 
 if analyze:
+    st.session_state.analyzed = True
     files = uploaded_files or []
-    if not files and not pasted_text.strip():
-        st.warning("Add at least one file or paste some report text, then press Analyze.")
-    else:
-        st.session_state.documents = {}
+    if files or pasted_text.strip():
         progress = st.progress(0.0, text="Reading files...")
         total = max(1, len(files))
         try:
@@ -320,7 +319,7 @@ if analyze:
                 digest = hashlib.md5(raw).hexdigest()
                 progress.progress(i / total, text=f"Reading {f.name} ({i + 1}/{total})")
                 if digest in st.session_state.documents:
-                    continue
+                    continue  # already added
                 size_mb = len(raw) / (1024 * 1024)
                 text, note, ok = extract_text(raw, f.name)
                 if size_mb > LARGE_FILE_MB:
@@ -329,24 +328,36 @@ if analyze:
                     "name": f.name, "text": text, "note": note, "ok": ok
                 }
             if pasted_text.strip():
-                st.session_state.documents["pasted"] = {
-                    "name": "Pasted text", "text": pasted_text, "note": "Typed by hand", "ok": True
-                }
+                pasted_digest = hashlib.md5(pasted_text.encode()).hexdigest()
+                if pasted_digest not in st.session_state.documents:
+                    st.session_state.documents[pasted_digest] = {
+                        "name": f"Pasted text ({len(st.session_state.documents)+1})", 
+                        "text": pasted_text, 
+                        "note": "Typed by hand", 
+                        "ok": True
+                    }
             progress.progress(1.0, text="Done")
         except TesseractNotFoundError:
             progress.empty()
-            st.error("Tesseract OCR is not installed on the server. Add a packages.txt containing tesseract-ocr and tesseract-ocr-eng, then redeploy.")
+            st.error("Tesseract OCR is not installed on the server.")
+
+# زر إعادة ضبط أو تفريغ الملفات المرفوعة
+if st.session_state.documents:
+    if st.button("🗑️ Clear all uploaded files & start over", use_container_width=True):
+        st.session_state.documents = {}
+        st.session_state.analyzed = False
+        st.rerun()
 
 docs = st.session_state.documents
 if docs:
     st.divider()
-    st.subheader("3. Files read")
+    st.subheader("3. Files successfully added")
     for d in docs.values():
         chars = len(d["text"].strip())
         if d["ok"] and chars > 0:
             st.write(f"• **{d['name']}** — {d['note']} ({chars:,} characters)")
         elif d["ok"]:
-            st.write(f"⚠️ **{d['name']}** — no readable text found. Retake the photo in better light, straight on, filling the frame.")
+            st.write(f"⚠️ **{d['name']}** — no readable text found.")
         else:
             st.write(f"❌ **{d['name']}** — {d['note']}")
 
@@ -362,7 +373,7 @@ if docs:
                 missing.append(name)
 
         st.divider()
-        st.subheader("4. Audit result")
+        st.subheader("4. Cumulative audit result")
         done = len(found)
         st.progress(done / len(required), text=f"{done} of {len(required)} required tests found")
 
@@ -383,7 +394,7 @@ if docs:
         if missing:
             st.warning(f"⚠️ {len(missing)} test(s) still needed before surgery.")
         else:
-            st.success("✅ The file is complete — every required test is present.")
+            st.success("✅ The files are complete — every required test is present across all uploaded parts.")
 
         summary = [
             "Pre-Surgery Lab Tests Checker",
@@ -407,6 +418,6 @@ if docs:
             for d in docs.values():
                 st.markdown(f"**{d['name']}**")
                 st.text(d["text"][:20000] or "(empty)")
-else:
-    st.warning("No readable text came out of these files. If they are photos, retake straight on in good light with the text filling the frame, or paste text into the box above.")
-    
+elif st.session_state.get("analyzed", False):
+    st.warning("No readable text came out of these files. Retake the photo or try another file.")
+        
