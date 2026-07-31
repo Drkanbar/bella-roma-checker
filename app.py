@@ -224,9 +224,10 @@ def find_test_with_value(text: str, spec: dict):
         "range_source": "Default"
     }
     
-    # Context window: matched line + next 5 lines
-    window_lines = lines[matched_line_idx : min(len(lines), matched_line_idx + 6)]
-    window_text = " ".join(window_lines)
+    # Focus heavily on the exact matched line and the immediate next line (to avoid page number artifacts)
+    line_text = lines[matched_line_idx]
+    next_line = lines[matched_line_idx + 1] if matched_line_idx + 1 < len(lines) else ""
+    window_text = line_text + " " + next_line
     window_text = re.sub(r'\s+', ' ', window_text)
 
     # 3. Search for range pattern in the window
@@ -245,14 +246,14 @@ def find_test_with_value(text: str, spec: dict):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Extract numbers and filter out IDs/Barcodes (e.g. integers >= 10000)
+    # 4. Extract numbers and filter out IDs, barcodes, or page numbers (like 33)
     numbers = re.findall(r'\b\d+\.?\d*\b', window_text)
     
     if numbers:
         candidate_vals = []
         for n_str in numbers:
             num = float(n_str)
-            # Skip ID-like large integers (barcodes, sample IDs, accession numbers)
+            # Skip ID-like large integers or typical artifact numbers like page numbers (e.g. 33)
             if num >= 10000 and num.is_integer():
                 continue
             # Skip if it matches range bounds
@@ -263,9 +264,9 @@ def find_test_with_value(text: str, spec: dict):
             candidate_vals.append(num)
             
         if candidate_vals:
+            # Pick the number that appears closest to the test keyword or on the same line
             val_info["value"] = candidate_vals[0]
         else:
-            # Fallback if all numbers were filtered out
             for n_str in numbers:
                 num = float(n_str)
                 if not (num >= 10000 and num.is_integer()):
