@@ -4,7 +4,6 @@ import re
 import hashlib
 import streamlit as st
 from PIL import Image, ImageOps
-import fitz
 import pytesseract
 import PyPDF2
 
