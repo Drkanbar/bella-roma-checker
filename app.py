@@ -220,7 +220,6 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
     window_lines = []
     for offset in range(3):
         if matched_line_idx + offset < len(lines):
-            # Strip leading table row numbers like "1." or "2 -" from lines
             clean_l = re.sub(r'^\s*\d{1,2}\s*[\.\-\)]?\s*', '', lines[matched_line_idx + offset])
             window_lines.append(clean_l)
     window_text = " ".join(window_lines)
@@ -246,27 +245,48 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
     clean_window = re.sub(r'\b20\d{2}\b', ' ', clean_window)
     clean_window = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', clean_window, flags=re.IGNORECASE)
 
-    # Find numbers and keep raw string representations to inspect decimals
+    # Find number tokens
     number_tokens = re.findall(r'\b\d+\.?\d*\b', clean_window)
     if number_tokens:
         candidate_vals = []
         for n_str in number_tokens:
-            num = float(n_str)
-            # Skip large IDs (>=10000), patient age, range bounds, and standalone integer '1' (print/page/row artifact)
+            try:
+                num = float(n_str)
+            except ValueError:
+                continue
+            
+            # Skip large IDs (>=10000), patient age, range bounds, and years
             if (num >= 10000 and num.is_integer()) or num == float(patient_age):
                 continue
-            if num == 1.0 and '.' not in n_str:
+            if 1900 <= num <= 2100 and num.is_integer():
                 continue
             if val_info["min"] is not None and num == val_info["min"]:
                 continue
             if val_info["max"] is not None and num == val_info["max"]:
                 continue
-            candidate_vals.append(num)
+            
+            candidate_vals.append((num, n_str))
             
         if candidate_vals:
-            val_info["value"] = candidate_vals[0]
-        elif number_tokens:
-            val_info["value"] = float(number_tokens[0])
+            ref_min = val_info.get("min")
+            ref_max = val_info.get("max")
+            
+            best_val = None
+            if ref_min is not None and ref_max is not None:
+                # Prioritize candidates within the reference range
+                valid_in_range = [c[0] for c in candidate_vals if ref_min <= c[0] <= ref_max]
+                if valid_in_range:
+                    best_val = valid_in_range[0]
+                else:
+                    # Pick the candidate closest to the midpoint of the range
+                    midpoint = (ref_min + ref_max) / 2
+                    best_val = min(candidate_vals, key=lambda c: abs(c[0] - midpoint))[0]
+            else:
+                # Fallback: filter out standalone small integers (< 2) like version numbers or row indices
+                filtered = [c[0] for c in candidate_vals if not (c[0] < 2.0 and '.' not in c[1])]
+                best_val = filtered[0] if filtered else candidate_vals[0][0]
+                
+            val_info["value"] = best_val
             
         val = val_info["value"]
         ref_min = val_info["min"]
