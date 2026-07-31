@@ -4,9 +4,8 @@ import re
 import hashlib
 import streamlit as st
 from PIL import Image, ImageOps
-import fitz  # PyMuPDF
+import fitz
 import pytesseract
-from pytesseract import TesseractNotFoundError
 import PyPDF2
 
 # 1. Define the Pre-Operative Checklist (Required Tests)
