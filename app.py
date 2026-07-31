@@ -245,9 +245,11 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Clean window text by removing date patterns (e.g., 30/07, 30-07-2026) and years so their components aren't parsed as values
+    # 4. Clean window text by removing dates, years, and time patterns (e.g., 17:00, 30/07, 2026)
     window_text_clean = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', window_text)
     window_text_clean = re.sub(r'\b20\d{2}\b', ' ', window_text_clean)
+    window_text_clean = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', window_text_clean, flags=re.IGNORECASE)
+    window_text_clean = re.sub(r'\b\d{1,2}\s*(?:HRS|HOURS|AM|PM)\b', ' ', window_text_clean, flags=re.IGNORECASE)
 
     # 5. Extract numbers from the cleaned window text and filter out IDs, barcodes, and patient age
     numbers = re.findall(r'\b\d+\.?\d*\b', window_text_clean)
