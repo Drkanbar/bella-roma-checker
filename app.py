@@ -26,6 +26,8 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+BUILD = "2026-07-31-c"
+
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif")
 PDF_EXT = (".pdf",)
 MAX_OCR_PAGES = 20
@@ -261,6 +263,10 @@ def _looks_like_prose(line: str) -> bool:
         return True
     if line.rstrip().endswith(".") and len(line.split()) > 6:
         return True
+    # Interpretation-guide labels, e.g. "IRON OVERLOAD : > 200",
+    # "DEFICIENCY : < 10" -- a cutoff legend, not a measured result.
+    if re.match(r"^[A-Z][A-Z \-/()]{2,40}\s*:\s*[<>]", line):
+        return True
     return False
 
 def _has_range(line: str) -> bool:
@@ -317,9 +323,11 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
                 score = 1 if _has_range(" ".join(ahead)) else 3
             else:
                 score = 7
-        if best is None or score < best[0]:
-            best = (score, idx)
-            if score == 0:
+        at_start = m.start() <= 2
+        rank = (score, 0 if at_start else 1)
+        if best is None or rank < best[0]:
+            best = (rank, idx)
+            if rank == (0, 0):
                 break
     return best[1] if best else None
 
@@ -540,6 +548,7 @@ def extract_text(data: bytes, filename: str):
 #
 st.title("Pre-Surgery Lab Tests Checker")
 st.caption("Upload the patient's reports as PDFs or photos one at a time or all at once.")
+st.caption(f"Matching engine build: {BUILD}")
 
 if "documents" not in st.session_state:
     st.session_state.documents = {}
