@@ -1,10 +1,7 @@
-import io
-import os
-import re
-import hashlib
 import streamlit as st
-from PIL import Image, ImageOps
-import pytesseract
+import re
+import PyPDF2
+
 # 1. Define the Pre-Operative Checklist (Required Tests)
 # You can add or remove test names exactly as they appear in the lab reports.
 REQUIRED_TESTS = [
