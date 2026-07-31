@@ -186,27 +186,36 @@ def weak_hit_is_real(text: str, match) -> bool:
 
 def find_test_with_value(text: str, spec: dict):
     """
-    Extracts test result, prioritising mathematical comparison with printed/default reference range.
+    Extracts test result using a multi-line context window to handle PDF table cell line breaks.
     """
     matched_kw = None
+    lines = text.split("\n")
+    matched_line_idx = -1
     
-    # Check strong keywords
+    # 1. Check strong keywords
     for kw in spec.get("strong", []):
-        if re.search(keyword_pattern(kw), text):
-            matched_kw = kw
+        pat = keyword_pattern(kw)
+        for idx, line in enumerate(lines):
+            if re.search(pat, line):
+                matched_kw = kw
+                matched_line_idx = idx
+                break
+        if matched_kw:
             break
             
-    # Check weak keywords if no strong hit
+    # 2. Check weak keywords if no strong hit
     if not matched_kw:
         for kw in spec.get("weak", []):
-            for m in re.finditer(keyword_pattern(kw), text):
-                if weak_hit_is_real(text, m):
+            pat = keyword_pattern(kw)
+            for idx, line in enumerate(lines):
+                if re.search(pat, line) and weak_hit_is_real(text, re.search(pat, line)):
                     matched_kw = kw
+                    matched_line_idx = idx
                     break
             if matched_kw:
                 break
 
-    if not matched_kw:
+    if not matched_kw or matched_line_idx == -1:
         return None
 
     val_info = {
@@ -218,50 +227,62 @@ def find_test_with_value(text: str, spec: dict):
         "range_source": "Default"
     }
     
-    lines = text.split("\n")
-    for line in lines:
-        if re.search(keyword_pattern(matched_kw), line):
-            # 1. Search for range pattern on the report line (e.g., "12.0 - 16.5" or "< 5.0")
-            range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', line)
-            less_than_match = re.search(r'<\s*(\d+\.?\d*)', line)
+    # 3. Create a context window: matched line + next 6 lines (to capture values, flags, and ranges in tables)
+    window_lines = lines[matched_line_idx : min(len(lines), matched_line_idx + 7)]
+    window_text = " ".join(window_lines)
+    window_text = re.sub(r'\s+', ' ', window_text)
+
+    # 4. Search for range pattern in the window
+    range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', window_text)
+    less_than_match = re.search(r'<\s*(\d+\.?\d*)', window_text)
+    
+    if range_match:
+        val_info["min"] = float(range_match.group(1))
+        val_info["max"] = float(range_match.group(2))
+        val_info["range_source"] = "Report"
+    elif less_than_match:
+        val_info["min"] = 0.0
+        val_info["max"] = float(less_than_match.group(1))
+        val_info["range_source"] = "Report"
+
+    # 5. Extract numbers from the window text
+    numbers = re.findall(r'\b\d+\.?\d*\b', window_text)
+    
+    if numbers:
+        candidate_vals = []
+        for n_str in numbers:
+            num = float(n_str)
+            if val_info["min"] is not None and num == val_info["min"]:
+                continue
+            if val_info["max"] is not None and num == val_info["max"]:
+                continue
+            candidate_vals.append(num)
             
-            line_for_val = line
-            if range_match:
-                val_info["min"] = float(range_match.group(1))
-                val_info["max"] = float(range_match.group(2))
-                val_info["range_source"] = "Report"
-                line_for_val = line[:range_match.start()] + " " + line[range_match.end():]
-            elif less_than_match:
-                val_info["min"] = 0.0
-                val_info["max"] = float(less_than_match.group(1))
-                val_info["range_source"] = "Report"
-                line_for_val = line[:less_than_match.start()] + " " + line[less_than_match.end():]
+        if candidate_vals:
+            val_info["value"] = candidate_vals[0]
+        else:
+            val_info["value"] = float(numbers[0])
             
-            # 2. Extract patient value from remaining line text
-            numbers = re.findall(r'\b\d+\.?\d*\b', line_for_val)
-            if numbers:
-                val_info["value"] = float(numbers[0])
-                val = val_info["value"]
-                ref_min = val_info["min"]
-                ref_max = val_info["max"]
-                
-                # 3. Numerical comparison FIRST (Mathematical precision)
-                if ref_min is not None and val < ref_min:
-                    val_info["status"] = "LOW"
-                elif ref_max is not None and val > ref_max:
-                    val_info["status"] = "HIGH"
-                else:
-                    # 4. Strict lab flags check ONLY if numerical values are within range or missing
-                    has_high_flag = bool(re.search(r'\bHIGH\b|\bHI\b|\([HH]\)|\[[HH]\]|\*[HH]\*', line))
-                    has_low_flag = bool(re.search(r'\bLOW\b|\bLO\b|\([LL]\)|\[[LL]\]|\*[LL]\*', line))
-                    
-                    if has_high_flag and not has_low_flag:
-                        val_info["status"] = "HIGH"
-                    elif has_low_flag and not has_high_flag:
-                        val_info["status"] = "LOW"
-                    else:
-                        val_info["status"] = "NORMAL"
-            break
+        val = val_info["value"]
+        ref_min = val_info["min"]
+        ref_max = val_info["max"]
+        
+        # 6. Numerical comparison
+        if ref_min is not None and val < ref_min:
+            val_info["status"] = "LOW"
+        elif ref_max is not None and val > ref_max:
+            val_info["status"] = "HIGH"
+        else:
+            # 7. Strict lab flags check in the window text
+            has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text))
+            has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text))
+            
+            if has_high_flag and not has_low_flag:
+                val_info["status"] = "HIGH"
+            elif has_low_flag and not has_high_flag:
+                val_info["status"] = "LOW"
+            else:
+                val_info["status"] = "NORMAL"
 
     return val_info
 
