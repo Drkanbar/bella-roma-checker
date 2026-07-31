@@ -245,8 +245,12 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Extract numbers and filter out IDs, barcodes, and patient age
-    numbers = re.findall(r'\b\d+\.?\d*\b', window_text)
+    # 4. Clean window text by removing date patterns (e.g., 30/07, 30-07-2026) and years so their components aren't parsed as values
+    window_text_clean = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', window_text)
+    window_text_clean = re.sub(r'\b20\d{2}\b', ' ', window_text_clean)
+
+    # 5. Extract numbers from the cleaned window text and filter out IDs, barcodes, and patient age
+    numbers = re.findall(r'\b\d+\.?\d*\b', window_text_clean)
     
     if numbers:
         candidate_vals = []
@@ -277,7 +281,7 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         ref_min = val_info["min"]
         ref_max = val_info["max"]
         
-        # 5. Numerical comparison & flags check
+        # 6. Numerical comparison & flags check
         if val is not None:
             if ref_min is not None and val < ref_min:
                 val_info["status"] = "LOW"
