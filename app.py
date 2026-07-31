@@ -1,17 +1,17 @@
 import streamlit as st
 import re
-from pypdf import PdfReader
+import PyPDF2
 
-# 1. Define the Pre-Operative Checklist (Required Tests)
+# 1. Required Pre-Operative Tests Checklist
 REQUIRED_TESTS = [
     "Hb", "WBC", "PLT", "PT", "INR", "Creatinine", "Urea", "Na", "K", "Glucose"
 ]
 
 def extract_text_from_pdf(uploaded_file):
-    """Extracts raw text from the uploaded PDF document using the modern pypdf library."""
+    """Extracts raw text using original PyPDF2 library."""
     text = ""
     try:
-        reader = PdfReader(uploaded_file)
+        reader = PyPDF2.PdfReader(uploaded_file)
         for page in reader.pages:
             extracted = page.extract_text()
             if extracted:
@@ -22,14 +22,13 @@ def extract_text_from_pdf(uploaded_file):
 
 def parse_lab_results(text, required_tests):
     """
-    Scans the extracted text for required tests, matches their values and 
-    reference ranges, and evaluates if they are out of range.
+    Scans extracted text for required tests, extracts patient values and 
+    reference ranges (Min - Max), then evaluates status (NORMAL, HIGH, LOW, MISSING).
     """
     results = []
     
     for test in required_tests:
-        # Regex pattern matching:
-        # Test Name -> Result Value -> Min Range - Max Range
+        # Matches: Test Name ... Patient Value ... Min Range - Max Range
         pattern = rf"(?i)\b({test})\b.*?(\d+\.?\d*).*?(\d+\.?\d*)\s*-\s*(\d+\.?\d*)"
         
         match = re.search(pattern, text)
@@ -65,7 +64,7 @@ def main():
     st.set_page_config(page_title="Pre-Op Lab Analyzer", page_icon="⚕️")
     
     st.title("Pre-Operative Lab Report Analyzer")
-    st.write("Upload a patient's lab report (PDF) to verify required tests and detect abnormal values based on the report's embedded reference ranges.")
+    st.write("Upload patient lab report (PDF) to verify required tests and detect out-of-range values.")
     
     uploaded_file = st.file_uploader("Upload Lab Report (PDF)", type=["pdf"])
     
@@ -83,13 +82,13 @@ def main():
                 missing = [r for r in analysis_results if r["status"] == "MISSING"]
                 normal = [r for r in analysis_results if r["status"] == "NORMAL"]
                 
-                # 1. Missing Tests
+                # 1. Missing Tests (Critical Priority)
                 if missing:
                     st.error(f"⚠️ Missing Tests ({len(missing)})")
                     for item in missing:
                         st.write(f"- **{item['test']}**: Not found in the report.")
                 
-                # 2. Out of Range Tests
+                # 2. Out of Range Tests (High / Low)
                 if abnormal:
                     st.warning(f"🚨 Out of Range Tests ({len(abnormal)})")
                     for item in abnormal:
