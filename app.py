@@ -184,7 +184,7 @@ def weak_hit_is_real(text: str, match) -> bool:
         return False
     return bool(re.search(r"\d", tail))
 
-def find_test_with_value(text: str, spec: dict):
+def find_test_with_value(text: str, spec: dict, patient_age: int):
     matched_kw = None
     lines = text.split("\n")
     matched_line_idx = -1
@@ -224,7 +224,6 @@ def find_test_with_value(text: str, spec: dict):
         "range_source": "Default"
     }
     
-    # Focus heavily on the exact matched line and the immediate next line (to avoid page number artifacts)
     line_text = lines[matched_line_idx]
     next_line = lines[matched_line_idx + 1] if matched_line_idx + 1 < len(lines) else ""
     window_text = line_text + " " + next_line
@@ -246,15 +245,15 @@ def find_test_with_value(text: str, spec: dict):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Extract numbers and filter out IDs, barcodes, or page numbers (like 33)
+    # 4. Extract numbers and filter out IDs, barcodes, and patient age
     numbers = re.findall(r'\b\d+\.?\d*\b', window_text)
     
     if numbers:
         candidate_vals = []
         for n_str in numbers:
             num = float(n_str)
-            # Skip ID-like large integers or typical artifact numbers like page numbers (e.g. 33)
-            if num >= 10000 and num.is_integer():
+            # Skip ID-like large integers or if it matches patient age
+            if (num >= 10000 and num.is_integer()) or num == float(patient_age):
                 continue
             # Skip if it matches range bounds
             if val_info["min"] is not None and num == val_info["min"]:
@@ -264,12 +263,11 @@ def find_test_with_value(text: str, spec: dict):
             candidate_vals.append(num)
             
         if candidate_vals:
-            # Pick the number that appears closest to the test keyword or on the same line
             val_info["value"] = candidate_vals[0]
         else:
             for n_str in numbers:
                 num = float(n_str)
-                if not (num >= 10000 and num.is_integer()):
+                if not ((num >= 10000 and num.is_integer()) or num == float(patient_age)):
                     val_info["value"] = num
                     break
             if val_info["value"] is None and numbers:
@@ -397,7 +395,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     patient_name = st.text_input("Patient name", "")
 with c2:
-    patient_age = st.number_input("Age", min_value=1, max_value=120, value=25)
+    patient_age = st.number_input("Age", min_value=1, max_value=120, value=33)
 with c3:
     patient_gender = st.selectbox("Gender", ["Female", "Male"])
 
@@ -469,7 +467,7 @@ if docs:
         found, abnormal, missing = {}, {}, []
         
         for name, spec in required.items():
-            res = find_test_with_value(combined, spec)
+            res = find_test_with_value(combined, spec, int(patient_age))
             if res:
                 if res["status"] in ["HIGH", "LOW"]:
                     abnormal[name] = res
