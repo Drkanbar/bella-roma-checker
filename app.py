@@ -185,9 +185,6 @@ def weak_hit_is_real(text: str, match) -> bool:
     return bool(re.search(r"\d", tail))
 
 def find_test_with_value(text: str, spec: dict):
-    """
-    Extracts test result using a multi-line context window to handle PDF table cell line breaks.
-    """
     matched_kw = None
     lines = text.split("\n")
     matched_line_idx = -1
@@ -227,31 +224,38 @@ def find_test_with_value(text: str, spec: dict):
         "range_source": "Default"
     }
     
-    # 3. Create a context window: matched line + next 6 lines (to capture values, flags, and ranges in tables)
-    window_lines = lines[matched_line_idx : min(len(lines), matched_line_idx + 7)]
+    # Context window: matched line + next 5 lines
+    window_lines = lines[matched_line_idx : min(len(lines), matched_line_idx + 6)]
     window_text = " ".join(window_lines)
     window_text = re.sub(r'\s+', ' ', window_text)
 
-    # 4. Search for range pattern in the window
+    # 3. Search for range pattern in the window
     range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', window_text)
     less_than_match = re.search(r'<\s*(\d+\.?\d*)', window_text)
     
     if range_match:
-        val_info["min"] = float(range_match.group(1))
-        val_info["max"] = float(range_match.group(2))
-        val_info["range_source"] = "Report"
+        rmin = float(range_match.group(1))
+        rmax = float(range_match.group(2))
+        if rmin <= rmax:
+            val_info["min"] = rmin
+            val_info["max"] = rmax
+            val_info["range_source"] = "Report"
     elif less_than_match:
         val_info["min"] = 0.0
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 5. Extract numbers from the window text
+    # 4. Extract numbers and filter out IDs/Barcodes (e.g. integers >= 10000)
     numbers = re.findall(r'\b\d+\.?\d*\b', window_text)
     
     if numbers:
         candidate_vals = []
         for n_str in numbers:
             num = float(n_str)
+            # Skip ID-like large integers (barcodes, sample IDs, accession numbers)
+            if num >= 10000 and num.is_integer():
+                continue
+            # Skip if it matches range bounds
             if val_info["min"] is not None and num == val_info["min"]:
                 continue
             if val_info["max"] is not None and num == val_info["max"]:
@@ -261,28 +265,35 @@ def find_test_with_value(text: str, spec: dict):
         if candidate_vals:
             val_info["value"] = candidate_vals[0]
         else:
-            val_info["value"] = float(numbers[0])
+            # Fallback if all numbers were filtered out
+            for n_str in numbers:
+                num = float(n_str)
+                if not (num >= 10000 and num.is_integer()):
+                    val_info["value"] = num
+                    break
+            if val_info["value"] is None and numbers:
+                val_info["value"] = float(numbers[0])
             
         val = val_info["value"]
         ref_min = val_info["min"]
         ref_max = val_info["max"]
         
-        # 6. Numerical comparison
-        if ref_min is not None and val < ref_min:
-            val_info["status"] = "LOW"
-        elif ref_max is not None and val > ref_max:
-            val_info["status"] = "HIGH"
-        else:
-            # 7. Strict lab flags check in the window text
-            has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text))
-            has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text))
-            
-            if has_high_flag and not has_low_flag:
-                val_info["status"] = "HIGH"
-            elif has_low_flag and not has_high_flag:
+        # 5. Numerical comparison & flags check
+        if val is not None:
+            if ref_min is not None and val < ref_min:
                 val_info["status"] = "LOW"
+            elif ref_max is not None and val > ref_max:
+                val_info["status"] = "HIGH"
             else:
-                val_info["status"] = "NORMAL"
+                has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text))
+                has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text))
+                
+                if has_high_flag and not has_low_flag:
+                    val_info["status"] = "HIGH"
+                elif has_low_flag and not has_high_flag:
+                    val_info["status"] = "LOW"
+                else:
+                    val_info["status"] = "NORMAL"
 
     return val_info
 
