@@ -186,7 +186,7 @@ def weak_hit_is_real(text: str, match) -> bool:
 
 def find_test_with_value(text: str, spec: dict):
     """
-    Extracts test result, prioritising the reference range printed directly on the lab report.
+    Extracts test result, prioritising mathematical comparison with printed/default reference range.
     """
     matched_kw = None
     
@@ -230,7 +230,6 @@ def find_test_with_value(text: str, spec: dict):
                 val_info["min"] = float(range_match.group(1))
                 val_info["max"] = float(range_match.group(2))
                 val_info["range_source"] = "Report"
-                # Remove range substring to prevent range numbers from being read as patient value
                 line_for_val = line[:range_match.start()] + " " + line[range_match.end():]
             elif less_than_match:
                 val_info["min"] = 0.0
@@ -246,20 +245,22 @@ def find_test_with_value(text: str, spec: dict):
                 ref_min = val_info["min"]
                 ref_max = val_info["max"]
                 
-                # 3. Check for explicit lab flags (e.g. HIGH, LOW, H, L, *)
-                has_high_flag = bool(re.search(r'\b(HIGH|H|\*)\b', line))
-                has_low_flag = bool(re.search(r'\b(LOW|L)\b', line))
-                
-                if has_high_flag and not has_low_flag:
-                    val_info["status"] = "HIGH"
-                elif has_low_flag and not has_high_flag:
-                    val_info["status"] = "LOW"
-                elif ref_min is not None and val < ref_min:
+                # 3. Numerical comparison FIRST (Mathematical precision)
+                if ref_min is not None and val < ref_min:
                     val_info["status"] = "LOW"
                 elif ref_max is not None and val > ref_max:
                     val_info["status"] = "HIGH"
                 else:
-                    val_info["status"] = "NORMAL"
+                    # 4. Strict lab flags check ONLY if numerical values are within range or missing
+                    has_high_flag = bool(re.search(r'\bHIGH\b|\bHI\b|\([HH]\)|\[[HH]\]|\*[HH]\*', line))
+                    has_low_flag = bool(re.search(r'\bLOW\b|\bLO\b|\([LL]\)|\[[LL]\]|\*[LL]\*', line))
+                    
+                    if has_high_flag and not has_low_flag:
+                        val_info["status"] = "HIGH"
+                    elif has_low_flag and not has_high_flag:
+                        val_info["status"] = "LOW"
+                    else:
+                        val_info["status"] = "NORMAL"
             break
 
     return val_info
