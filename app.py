@@ -216,11 +216,13 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         "range_source": "Default"
     }
     
-    # Build a local search window (current line + next 2 lines to handle multi-line table rows)
+    # Build a local search window (current line + next 2 lines)
     window_lines = []
     for offset in range(3):
         if matched_line_idx + offset < len(lines):
-            window_lines.append(lines[matched_line_idx + offset])
+            # Strip leading table row numbers like "1." or "2 -" from lines
+            clean_l = re.sub(r'^\s*\d{1,2}\s*[\.\-\)]?\s*', '', lines[matched_line_idx + offset])
+            window_lines.append(clean_l)
     window_text = " ".join(window_lines)
 
     # 3. Search for reference range patterns in the local window
@@ -239,18 +241,21 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Clean window text from dates, times, and years to avoid false value extraction
+    # 4. Clean window text from dates, times, and years
     clean_window = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', window_text)
     clean_window = re.sub(r'\b20\d{2}\b', ' ', clean_window)
     clean_window = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', clean_window, flags=re.IGNORECASE)
 
-    numbers = re.findall(r'\b\d+\.?\d*\b', clean_window)
-    if numbers:
+    # Find numbers and keep raw string representations to inspect decimals
+    number_tokens = re.findall(r'\b\d+\.?\d*\b', clean_window)
+    if number_tokens:
         candidate_vals = []
-        for n_str in numbers:
+        for n_str in number_tokens:
             num = float(n_str)
-            # Skip large ID/barcode integers (>=10000), patient age, or exact range bounds
+            # Skip large IDs (>=10000), patient age, range bounds, and standalone integer '1' (print/page/row artifact)
             if (num >= 10000 and num.is_integer()) or num == float(patient_age):
+                continue
+            if num == 1.0 and '.' not in n_str:
                 continue
             if val_info["min"] is not None and num == val_info["min"]:
                 continue
@@ -260,8 +265,8 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
             
         if candidate_vals:
             val_info["value"] = candidate_vals[0]
-        elif numbers:
-            val_info["value"] = float(numbers[0])
+        elif number_tokens:
+            val_info["value"] = float(number_tokens[0])
             
         val = val_info["value"]
         ref_min = val_info["min"]
