@@ -50,7 +50,7 @@ BASE_TESTS = {
         "min": 12.0, "max": 16.5
     },
     "Ferritin": {"strong": ["FERRITIN"], "min": 13.0, "max": 150.0},
-    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"], "min": 60.0, "max": 170.0},
+    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"], "min": 33.0, "max": 193.0},
     "SGPT / ALT": {
         "strong": ["SGPT", "ALANINE AMINOTRANSFERASE", "ALANINE TRANSAMINASE"],
         "weak": ["ALT"],
@@ -224,6 +224,10 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
             window_lines.append(clean_l)
     window_text = " ".join(window_lines)
 
+    # Check for explicit H / L flags in the window first
+    has_high_flag = bool(re.search(r'\b(HIGH|HI)\b|\b\sH\s|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text) or re.search(r'\bH\b', window_lines[0] if window_lines else ""))
+    has_low_flag = bool(re.search(r'\b(LOW|LO)\b|\b\sL\s|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text) or re.search(r'\bL\b', window_lines[0] if window_lines else ""))
+
     # 3. Search for reference range patterns in the local window
     range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', window_text)
     less_than_match = re.search(r'<\s*(\d+\.?\d*)', window_text)
@@ -272,17 +276,26 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
             ref_max = val_info.get("max")
             
             best_val = None
-            if ref_min is not None and ref_max is not None:
-                # Prioritize candidates within the reference range
+            if has_high_flag and ref_max is not None:
+                # If explicitly flagged HIGH, look for a value greater than max or take the first non-range candidate
+                higher_vals = [c[0] for c in candidate_vals if c[0] > ref_max]
+                if higher_vals:
+                    best_val = higher_vals[0]
+            
+            if best_val is None and ref_min is not None and ref_max is not None:
                 valid_in_range = [c[0] for c in candidate_vals if ref_min <= c[0] <= ref_max]
-                if valid_in_range:
+                if valid_in_range and not has_high_flag and not has_low_flag:
                     best_val = valid_in_range[0]
                 else:
-                    # Pick the candidate closest to the midpoint of the range
-                    midpoint = (ref_min + ref_max) / 2
-                    best_val = min(candidate_vals, key=lambda c: abs(c[0] - midpoint))[0]
-            else:
-                # Fallback: filter out standalone small integers (< 2) like version numbers or row indices
+                    # If flagged or out of range, pick the value outside range or first candidate
+                    out_range = [c[0] for c in candidate_vals if c[0] > ref_max or c[0] < ref_min]
+                    if out_range:
+                        best_val = out_range[0]
+                    else:
+                        midpoint = (ref_min + ref_max) / 2
+                        best_val = min(candidate_vals, key=lambda c: abs(c[0] - midpoint))[0]
+            
+            if best_val is None:
                 filtered = [c[0] for c in candidate_vals if not (c[0] < 2.0 and '.' not in c[1])]
                 best_val = filtered[0] if filtered else candidate_vals[0][0]
                 
@@ -294,20 +307,16 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         
         # 5. Numerical comparison & explicit flag checks
         if val is not None:
-            if ref_min is not None and val < ref_min:
+            if has_high_flag:
+                val_info["status"] = "HIGH"
+            elif has_low_flag:
+                val_info["status"] = "LOW"
+            elif ref_min is not None and val < ref_min:
                 val_info["status"] = "LOW"
             elif ref_max is not None and val > ref_max:
                 val_info["status"] = "HIGH"
             else:
-                has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text))
-                has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text))
-                
-                if has_high_flag and not has_low_flag:
-                    val_info["status"] = "HIGH"
-                elif has_low_flag and not has_high_flag:
-                    val_info["status"] = "LOW"
-                else:
-                    val_info["status"] = "NORMAL"
+                val_info["status"] = "NORMAL"
 
     return val_info
 
