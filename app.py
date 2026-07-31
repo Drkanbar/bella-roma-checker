@@ -32,9 +32,9 @@ MAX_OCR_PAGES = 20
 LARGE_FILE_MB = 12
 OCR_DPI = 200
 
-# Test definitions
+# Base tests with Default Fallback Ranges (used only if not printed in the lab report)
 BASE_TESTS = {
-    "CBC": {
+    "CBC / Hemoglobin": {
         "strong": [
             "CBC",
             "COMPLETE BLOOD COUNT",
@@ -46,23 +46,27 @@ BASE_TESTS = {
             "RBC",
             "HEMATOCRIT",
             "HAEMATOCRIT",
-        ]
+        ],
+        "min": 12.0, "max": 16.5
     },
-    "Ferritin": {"strong": ["FERRITIN"]},
-    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"]},
+    "Ferritin": {"strong": ["FERRITIN"], "min": 13.0, "max": 150.0},
+    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"], "min": 60.0, "max": 170.0},
     "SGPT / ALT": {
         "strong": ["SGPT", "ALANINE AMINOTRANSFERASE", "ALANINE TRANSAMINASE"],
         "weak": ["ALT"],
+        "min": 7.0, "max": 56.0
     },
     "SGOT / AST": {
         "strong": ["SGOT", "ASPARTATE AMINOTRANSFERASE", "ASPARTATE TRANSAMINASE"],
         "weak": ["AST"],
+        "min": 10.0, "max": 40.0
     },
-    "Urea": {"strong": ["UREA", "BLOOD UREA", "BUN"]},
-    "Creatinine": {"strong": ["CREATININE", "CREATENINE"]},
+    "Urea": {"strong": ["UREA", "BLOOD UREA", "BUN"], "min": 15.0, "max": 45.0},
+    "Creatinine": {"strong": ["CREATININE", "CREATENINE"], "min": 0.6, "max": 1.2},
     "PT / INR": {
         "strong": ["PROTHROMBIN TIME", "PROTHROMBIN", "INR"],
         "weak": ["PT"],
+        "min": 0.8, "max": 1.2
     },
     "APTT": {
         "strong": [
@@ -70,7 +74,8 @@ BASE_TESTS = {
             "PTT",
             "ACTIVATED PARTIAL THROMBOPLASTIN",
             "ACTIVATED PARTIAL",
-        ]
+        ],
+        "min": 30.0, "max": 40.0
     },
     "Blood Group (ABO & Rh)": {
         "strong": [
@@ -93,7 +98,8 @@ BASE_TESTS = {
             "GLYCOSYLATED HEMOGLOBIN",
             "GLYCATED HEMOGLOBIN",
             "GLYCATED HAEMOGLOBIN",
-        ]
+        ],
+        "min": 4.0, "max": 5.6
     },
     "RBS / Glucose": {
         "strong": [
@@ -103,21 +109,22 @@ BASE_TESTS = {
             "RANDOM BLOOD SUGAR",
             "FASTING BLOOD SUGAR",
             "BLOOD SUGAR",
-        ]
+        ],
+        "min": 70.0, "max": 100.0
     },
-    "TSH": {"strong": ["TSH", "THYROID STIMULATING HORMONE"]},
-    "T3": {"strong": ["FREE T3", "FT3", "TRIIODOTHYRONINE"], "weak": ["T3"]},
-    "T4": {"strong": ["FREE T4", "FT4", "THYROXINE"], "weak": ["T4"]},
+    "TSH": {"strong": ["TSH", "THYROID STIMULATING HORMONE"], "min": 0.4, "max": 4.0},
+    "T3": {"strong": ["FREE T3", "FT3", "TRIIODOTHYRONINE"], "weak": ["T3"], "min": 2.0, "max": 4.4},
+    "T4": {"strong": ["FREE T4", "FT4", "THYROXINE"], "weak": ["T4"], "min": 0.9, "max": 1.7},
     "HIV": {"strong": ["HIV", "HUMAN IMMUNODEFICIENCY"]},
     "HBsAg": {
         "strong": ["HBSAG", "HBS AG", "HEPATITIS B SURFACE", "HEPATITIS B"]
     },
     "Hepatitis C (HCV)": {"strong": ["HEPATITIS C", "HCV", "ANTI HCV"]},
-    "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"]},
-    "Sodium": {"strong": ["SODIUM", "NATRIUM"], "weak": ["NA+"]},
-    "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"]},
-    "Calcium": {"strong": ["CALCIUM"]},
-    "Magnesium": {"strong": ["MAGNESIUM"]},
+    "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"], "min": 0.0, "max": 5.0},
+    "Sodium": {"strong": ["SODIUM", "NATRIUM"], "weak": ["NA+"], "min": 135.0, "max": 145.0},
+    "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"], "min": 3.5, "max": 5.1},
+    "Calcium": {"strong": ["CALCIUM"], "min": 8.5, "max": 10.5},
+    "Magnesium": {"strong": ["MAGNESIUM"], "min": 1.7, "max": 2.2},
 }
 
 PREGNANCY_TEST = {
@@ -128,7 +135,8 @@ PREGNANCY_TEST = {
             "HCG",
             "PREGNANCY TEST",
             "PREGNANCY",
-        ]
+        ],
+        "min": 0.0, "max": 5.0
     }
 }
 
@@ -176,15 +184,85 @@ def weak_hit_is_real(text: str, match) -> bool:
         return False
     return bool(re.search(r"\d", tail))
 
-def find_test(text: str, spec: dict):
+def find_test_with_value(text: str, spec: dict):
+    """
+    Extracts test result, prioritising the reference range printed directly on the lab report.
+    """
+    matched_kw = None
+    
+    # Check strong keywords
     for kw in spec.get("strong", []):
         if re.search(keyword_pattern(kw), text):
-            return kw
-    for kw in spec.get("weak", []):
-        for m in re.finditer(keyword_pattern(kw), text):
-            if weak_hit_is_real(text, m):
-                return kw
-    return None
+            matched_kw = kw
+            break
+            
+    # Check weak keywords if no strong hit
+    if not matched_kw:
+        for kw in spec.get("weak", []):
+            for m in re.finditer(keyword_pattern(kw), text):
+                if weak_hit_is_real(text, m):
+                    matched_kw = kw
+                    break
+            if matched_kw:
+                break
+
+    if not matched_kw:
+        return None
+
+    val_info = {
+        "keyword": matched_kw,
+        "value": None,
+        "status": "FOUND",
+        "min": spec.get("min"),
+        "max": spec.get("max"),
+        "range_source": "Default"
+    }
+    
+    lines = text.split("\n")
+    for line in lines:
+        if re.search(keyword_pattern(matched_kw), line):
+            # 1. Search for range pattern on the report line (e.g., "12.0 - 16.5" or "< 5.0")
+            range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', line)
+            less_than_match = re.search(r'<\s*(\d+\.?\d*)', line)
+            
+            line_for_val = line
+            if range_match:
+                val_info["min"] = float(range_match.group(1))
+                val_info["max"] = float(range_match.group(2))
+                val_info["range_source"] = "Report"
+                # Remove range substring to prevent range numbers from being read as patient value
+                line_for_val = line[:range_match.start()] + " " + line[range_match.end():]
+            elif less_than_match:
+                val_info["min"] = 0.0
+                val_info["max"] = float(less_than_match.group(1))
+                val_info["range_source"] = "Report"
+                line_for_val = line[:less_than_match.start()] + " " + line[less_than_match.end():]
+            
+            # 2. Extract patient value from remaining line text
+            numbers = re.findall(r'\b\d+\.?\d*\b', line_for_val)
+            if numbers:
+                val_info["value"] = float(numbers[0])
+                val = val_info["value"]
+                ref_min = val_info["min"]
+                ref_max = val_info["max"]
+                
+                # 3. Check for explicit lab flags (e.g. HIGH, LOW, H, L, *)
+                has_high_flag = bool(re.search(r'\b(HIGH|H|\*)\b', line))
+                has_low_flag = bool(re.search(r'\b(LOW|L)\b', line))
+                
+                if has_high_flag and not has_low_flag:
+                    val_info["status"] = "HIGH"
+                elif has_low_flag and not has_high_flag:
+                    val_info["status"] = "LOW"
+                elif ref_min is not None and val < ref_min:
+                    val_info["status"] = "LOW"
+                elif ref_max is not None and val > ref_max:
+                    val_info["status"] = "HIGH"
+                else:
+                    val_info["status"] = "NORMAL"
+            break
+
+    return val_info
 
 def build_required_tests(age: int, gender: str) -> dict:
     tests = dict(BASE_TESTS)
@@ -302,7 +380,7 @@ with st.form("upload_form", clear_on_submit=False):
     pasted_text = st.text_area(
         "Or paste the report text here (fallback if your browser blocks uploads)",
         height=100,
-        placeholder="CBC, Hemoglobin 12.4 g/dL, Ferritin 45..."
+        placeholder="CBC, Hemoglobin 12.4 g/dL, Reference Range: 12.0 - 16.5..."
     )
     analyze = st.form_submit_button("Analyze reports", type="primary", use_container_width=True)
 
@@ -353,24 +431,43 @@ if docs:
     combined = normalize("\n".join(d["text"] for d in docs.values()))
     if combined.strip():
         required = build_required_tests(int(patient_age), patient_gender)
-        found, missing = {}, []
+        
+        found, abnormal, missing = {}, {}, []
+        
         for name, spec in required.items():
-            hit = find_test(combined, spec)
-            if hit:
-                found[name] = hit
+            res = find_test_with_value(combined, spec)
+            if res:
+                if res["status"] in ["HIGH", "LOW"]:
+                    abnormal[name] = res
+                else:
+                    found[name] = res
             else:
                 missing.append(name)
 
         st.divider()
         st.subheader("4. Audit result")
-        done = len(found)
+        done = len(found) + len(abnormal)
         st.progress(done / len(required), text=f"{done} of {len(required)} required tests found")
 
-        col_found, col_missing = st.columns(2)
-        with col_found:
-            st.success(f"Found ({len(found)})")
-            for name, kw in found.items():
-                st.write(f"• {name} \n <span style='color:#888;font-size:0.8em'>({kw})</span>", unsafe_allow_html=True)
+        col_normal, col_abnormal, col_missing = st.columns(3)
+        
+        with col_normal:
+            st.success(f"Normal ({len(found)})")
+            for name, data in found.items():
+                val_str = f" : {data['value']}" if data['value'] is not None else ""
+                st.write(f"• **{name}**{val_str}\n <span style='color:#888;font-size:0.8em'>({data['keyword']})</span>", unsafe_allow_html=True)
+                
+        with col_abnormal:
+            if abnormal:
+                st.warning(f"Out of Range ({len(abnormal)})")
+                for name, data in abnormal.items():
+                    tag = "🔺 HIGH" if data["status"] == "HIGH" else "🔻 LOW"
+                    src_tag = "من التقرير" if data["range_source"] == "Report" else "افتراضي"
+                    range_info = f"Ref: {data['min']} - {data['max']} ({src_tag})" if data['min'] is not None else ""
+                    st.write(f"• **{name}**: {data['value']} ➡️ **{tag}**\n <span style='color:#888;font-size:0.8em'>({range_info})</span>", unsafe_allow_html=True)
+            else:
+                st.success("No abnormal values")
+
         with col_missing:
             if missing:
                 st.error(f"Missing ({len(missing)})")
@@ -380,18 +477,21 @@ if docs:
                 st.success("Nothing missing")
 
         st.divider()
-        if missing:
-            st.warning(f"⚠️ {len(missing)} test(s) still needed before surgery.")
+        if missing or abnormal:
+            st.warning(f"⚠️ Action needed: {len(missing)} missing test(s), {len(abnormal)} out-of-range value(s).")
         else:
-            st.success("✅ The file is complete — every required test is present.")
+            st.success("✅ The file is complete — all required tests are present and within normal limits.")
 
         summary = [
             "Pre-Surgery Lab Tests Checker",
             f"Patient: {patient_name or '-'} | Age: {int(patient_age)} | Gender: {patient_gender}",
             f"Files: {', '.join(d['name'] for d in docs.values())}",
             "",
-            f"FOUND ({len(found)}):",
-            *[f"• {n}" for n in found],
+            f"NORMAL ({len(found)}):",
+            *[f"• {n}: {d['value'] if d['value'] is not None else 'Present'}" for n, d in found.items()],
+            "",
+            f"OUT OF RANGE ({len(abnormal)}):",
+            *[f"• {n}: {d['value']} ({d['status']}) [Range Source: {d['range_source']}]" for n, d in abnormal.items()],
             "",
             f"MISSING ({len(missing)}):",
             *[f"• {n}" for n in missing],
