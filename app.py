@@ -161,7 +161,7 @@ AGE_TESTS = {
     },
 }
 
-FIELD_WORDS = r"\b(NAME|ID|NO|NUMBER|AGE|SEX|GENDER|DOB|ADDRESS|PHONE|MOBILE|REF|REFERENCE|DOCTOR|DR|CLINIC|BARCODE|SAMPLE|VISIT|FILE)\b"
+HEADER_WORDS = r"\b(PATIENT|NAME|AGE|SEX|GENDER|DOB|DATE|TIME|HOSPITAL|CLINIC|DOCTOR|DR|ID|NO|BARCODE|SAMPLE|VISIT|FILE|PRINT|REPORT|PAGE|MRN)\b"
 
 #
 # Text normalisation & matching
@@ -178,21 +178,22 @@ def keyword_pattern(keyword: str) -> str:
     core = r"[\s\-.]*".join(parts)
     return r"(?<![A-Z0-9])" + core + r"(?![A-Z0-9])"
 
-def weak_hit_is_real(text: str, match) -> bool:
-    tail = text[match.end(): match.end() + 80]
-    if re.match(r"\s*[:.\-]?\s*" + FIELD_WORDS + r"(?![A-Z])", tail):
-        return False
-    return bool(re.search(r"\d", tail))
+def is_header_line(line: str) -> bool:
+    # If a line contains typical header keywords like Age, Date, Time, ID, Patient Name, ignore it
+    matches = len(re.findall(HEADER_WORDS, line))
+    return matches >= 2 or bool(re.search(r"\b(AGE|DOB|SEX|GENDER)\b", line))
 
 def find_test_with_value(text: str, spec: dict, patient_age: int):
-    matched_kw = None
     lines = text.split("\n")
+    matched_kw = None
     matched_line_idx = -1
     
-    # 1. Check strong keywords
+    # 1. Check strong keywords (ignoring header/metadata lines)
     for kw in spec.get("strong", []):
         pat = keyword_pattern(kw)
         for idx, line in enumerate(lines):
+            if is_header_line(line):
+                continue
             if re.search(pat, line):
                 matched_kw = kw
                 matched_line_idx = idx
@@ -205,7 +206,9 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         for kw in spec.get("weak", []):
             pat = keyword_pattern(kw)
             for idx, line in enumerate(lines):
-                if re.search(pat, line) and weak_hit_is_real(text, re.search(pat, line)):
+                if is_header_line(line):
+                    continue
+                if re.search(pat, line):
                     matched_kw = kw
                     matched_line_idx = idx
                     break
@@ -225,13 +228,14 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
     }
     
     line_text = lines[matched_line_idx]
-    next_line = lines[matched_line_idx + 1] if matched_line_idx + 1 < len(lines) else ""
-    window_text = line_text + " " + next_line
-    window_text = re.sub(r'\s+', ' ', window_text)
+    
+    # 3. Search for range pattern specifically on this line or the next line
+    search_scope = line_text
+    if matched_line_idx + 1 < len(lines):
+        search_scope += " " + lines[matched_line_idx + 1]
 
-    # 3. Search for range pattern in the window
-    range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', window_text)
-    less_than_match = re.search(r'<\s*(\d+\.?\d*)', window_text)
+    range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', search_scope)
+    less_than_match = re.search(r'<\s*(\d+\.?\d*)', search_scope)
     
     if range_match:
         rmin = float(range_match.group(1))
@@ -245,23 +249,26 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         val_info["max"] = float(less_than_match.group(1))
         val_info["range_source"] = "Report"
 
-    # 4. Clean window text by removing dates, years, and time patterns (e.g., 17:00, 30/07, 2026)
-    window_text_clean = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', window_text)
-    window_text_clean = re.sub(r'\b20\d{2}\b', ' ', window_text_clean)
-    window_text_clean = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', window_text_clean, flags=re.IGNORECASE)
-    window_text_clean = re.sub(r'\b\d{1,2}\s*(?:HRS|HOURS|AM|PM)\b', ' ', window_text_clean, flags=re.IGNORECASE)
+    # 4. Extract numbers strictly from the test line (after the keyword if possible)
+    kw_pos = line_text.upper().find(matched_kw.upper())
+    sub_line = line_text[kw_pos + len(matched_kw):] if kw_pos != -1 else line_text
 
-    # 5. Extract numbers from the cleaned window text and filter out IDs, barcodes, and patient age
-    numbers = re.findall(r'\b\d+\.?\d*\b', window_text_clean)
-    
+    # Clean sub_line from dates/times just in case
+    sub_line_clean = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', sub_line)
+    sub_line_clean = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', sub_line_clean, flags=re.IGNORECASE)
+
+    numbers = re.findall(r'\b\d+\.?\d*\b', sub_line_clean)
+    if not numbers:
+        # Fallback to whole line if nothing found after keyword
+        numbers = re.findall(r'\b\d+\.?\d*\b', line_text)
+
     if numbers:
         candidate_vals = []
         for n_str in numbers:
             num = float(n_str)
-            # Skip ID-like large integers or if it matches patient age
+            # Skip large ID numbers, patient age, or range bounds
             if (num >= 10000 and num.is_integer()) or num == float(patient_age):
                 continue
-            # Skip if it matches range bounds
             if val_info["min"] is not None and num == val_info["min"]:
                 continue
             if val_info["max"] is not None and num == val_info["max"]:
@@ -270,28 +277,22 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
             
         if candidate_vals:
             val_info["value"] = candidate_vals[0]
-        else:
-            for n_str in numbers:
-                num = float(n_str)
-                if not ((num >= 10000 and num.is_integer()) or num == float(patient_age)):
-                    val_info["value"] = num
-                    break
-            if val_info["value"] is None and numbers:
-                val_info["value"] = float(numbers[0])
+        elif numbers:
+            val_info["value"] = float(numbers[0])
             
         val = val_info["value"]
         ref_min = val_info["min"]
         ref_max = val_info["max"]
         
-        # 6. Numerical comparison & flags check
+        # 5. Numerical comparison & flags check
         if val is not None:
             if ref_min is not None and val < ref_min:
                 val_info["status"] = "LOW"
             elif ref_max is not None and val > ref_max:
                 val_info["status"] = "HIGH"
             else:
-                has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text))
-                has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text))
+                has_high_flag = bool(re.search(r'\b(HIGH|HI|H)\b|\([HH]\)|\[[HH]\]|\*[HH]\*', search_scope))
+                has_low_flag = bool(re.search(r'\b(LOW|LO|L)\b|\([LL]\)|\[[LL]\]|\*[LL]\*', search_scope))
                 
                 if has_high_flag and not has_low_flag:
                     val_info["status"] = "HIGH"
