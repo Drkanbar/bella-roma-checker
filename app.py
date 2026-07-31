@@ -231,37 +231,67 @@ def not_rdw_sd(lines, idx, match) -> bool:
 
 VALIDATORS = {"not_glycated": not_glycated, "not_rdw_sd": not_rdw_sd}
 
+PROSE_HINTS = re.compile(
+    r"\b(MAY|CAN|SHOULD|MUST|CAUSE[SD]?|FALSELY|ELEVATE[SD]?|LOWERED|INCREASE[SD]?|"
+    r"DECREASE[SD]?|PATIENTS?|RECOMMEND\w*|CRITERI\w+|DIAGNOS\w+|INTERPRET\w*|"
+    r"IMPLICATION\w*|INTERFERING|FACTORS?|COMMENTS?|REMARKS?|THERAPY|TREATMENT|"
+    r"ASSOCIATED|SUGGEST\w*|INDICAT\w+|CLINICAL|USEFUL|MONITOR\w*|ADVIS\w+|"
+    r"CORRELAT\w+|CONSIDER\w*|EXERCISE|INTAKE|PLEASE|KINDLY|REPEAT\w*|"
+    r"FOLLOW UP|DUE TO|SUCH AS|IN CASE)\b"
+)
+
+def _looks_like_prose(line: str) -> bool:
+    """Reject clinical-notes / interpretation sentences so they can never be
+    mistaken for a result row.
+
+    Lab reports carry a lot of explanatory prose that happens to name other
+    tests -- e.g. the Glucose test's own ADA criteria paragraph mentions
+    "HbA1c > 6.5%", and its interfering-factors note mentions
+    "Hematocrit > 55%". Those sentences contain numbers, so a purely
+    numeric heuristic can score them as plausible result rows. Structure is
+    what separates them: real rows are short, start with the test name, and
+    carry a unit and a reference range; prose is long, often bulleted, and
+    reads as a sentence.
+    """
+    if re.match(r"^\s*[\(\[]?\d+\s*[\)\.\]]\s+\S", line):   # "2) ..." / "3. ..." bullets
+        return True
+    if len(line) > 90:
+        return True
+    if PROSE_HINTS.search(line):
+        return True
+    if line.rstrip().endswith(".") and len(line.split()) > 6:
+        return True
+    return False
+
 def _has_range(line: str) -> bool:
     return bool(
-        re.search(r'\d+\.?\d*\s*[\-\–\—\~]+\s*\d+\.?\d*', line)
-        or re.search(r'[<≤]\s*\d+\.?\d*', line)
+        re.search(r'\d+\.?\d*\s*[\-\u2013\u2014\~]+\s*\d+\.?\d*', line)
+        or re.search(r'[<\u2264]\s*\d+\.?\d*', line)
     )
 
 def _line_has_number(lines, idx):
     return 0 <= idx < len(lines) and bool(NUM_RE.search(lines[idx]))
 
 def _best_occurrence(lines, kw, numeric_test, validate=None):
-    """Scan every line mentioning kw and rank each occurrence, returning the
-    single best one -- this checks ALL occurrences in the document rather
-    than stopping at the first textual hit, which is what previously let a
-    stray mention (e.g. "HbA1c > 6.5%" inside the Glucose test's own
-    clinical-notes paragraph, or "Hematocrit > 55%" inside an interfering-
-    factors note) outrank the real result row just because it appeared first.
+    """Scan every line mentioning kw, score each occurrence, return the best.
 
-    Tier 0: same line has a number AND a parseable reference range -- this is
-            almost certainly the actual result row.
-    Tier 1: same line has a number but no range -- still plausible, but a
-            plain narrative mention (no range attached) is far more likely
-            here than an actual reading.
-    Tier 2: a number appears 1-2 lines below -- handles investigation names
-            that wrap onto their own line before the value, e.g.
-            "APTT (ACTIVATED PARTIAL / THROMBOPLASTIN TIME) / 26.8 L seconds...".
-    Tier 3: keyword found but nothing numeric nearby at all -- last resort,
-            e.g. a bare panel heading like "(T3,T4,TSH)".
-    Ties within a tier go to the earliest occurrence in the document.
+    Scoring is deliberately layout-independent, because different PDF text
+    engines emit the same table row differently: some join a row into one
+    line ("GLUCOSE (RANDOM) 83 MG/DL 70 - 140"), others put each cell on its
+    own line. Both shapes have to work, so a name-only line followed by the
+    value block scores nearly as well as a self-contained row -- and prose is
+    rejected outright rather than being allowed to outrank either.
+
+    0  self-contained result row: number and reference range on the line
+    1  name on its own line, with a number and a range just below
+    2  number on the line, no range
+    3  name on its own line with a number below, no range
+    7  keyword present but nothing numeric nearby (bare panel heading)
+    8  prose / clinical-notes sentence -- last resort only
+    Ties go to the earliest occurrence in the document.
     """
     pat = keyword_pattern(kw)
-    best = None  # (priority, idx)
+    best = None  # (score, idx)
     for idx, line in enumerate(lines):
         m = re.search(pat, line)
         if not m:
@@ -269,17 +299,28 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
         if validate and not validate(lines, idx, m):
             continue
         if not numeric_test:
-            return idx  # qualitative test: first genuine mention is enough
-        if _line_has_number(lines, idx):
-            prio = 0 if _has_range(line) else 1
-        elif _line_has_number(lines, idx + 1) or _line_has_number(lines, idx + 2):
-            prio = 2
+            if _looks_like_prose(line) and best is not None:
+                continue
+            if not _looks_like_prose(line):
+                return idx
+            score = 8
+        elif _looks_like_prose(line):
+            score = 8
+        elif _line_has_number(lines, idx):
+            score = 0 if _has_range(line) else 2
         else:
-            prio = 3
-        if best is None or prio < best[0]:
-            best = (prio, idx)
-            if prio == 0:
-                break  # can't beat this
+            # Investigation name on its own line -- either a wrapped name
+            # (e.g. APTT) or a cell-per-line table layout. Look ahead for the
+            # value block.
+            ahead = [lines[idx + o] for o in (1, 2, 3) if idx + o < len(lines)]
+            if any(NUM_RE.search(a) for a in ahead):
+                score = 1 if _has_range(" ".join(ahead)) else 3
+            else:
+                score = 7
+        if best is None or score < best[0]:
+            best = (score, idx)
+            if score == 0:
+                break
     return best[1] if best else None
 
 def find_test_with_value(text: str, spec: dict):
@@ -319,13 +360,19 @@ def find_test_with_value(text: str, spec: dict):
     # names that wrap before the value appears, e.g. APTT).
     value_line_idx = matched_line_idx
     if not _line_has_number(lines, value_line_idx):
-        for offset in (1, 2):
+        for offset in (1, 2, 3):
             if _line_has_number(lines, matched_line_idx + offset):
                 value_line_idx = matched_line_idx + offset
                 break
 
     value_line = lines[value_line_idx] if 0 <= value_line_idx < len(lines) else ""
-    next_line = lines[value_line_idx + 1] if value_line_idx + 1 < len(lines) else ""
+    # Under a cell-per-line layout the unit and reference range land on the
+    # lines after the value, so the fallback window reaches a little further.
+    next_line = " ".join(
+        lines[value_line_idx + o]
+        for o in (1, 2, 3)
+        if value_line_idx + o < len(lines)
+    )
 
     def ranges_in(s):
         rm = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~]+\s*(\d+\.?\d*)', s)
