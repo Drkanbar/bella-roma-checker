@@ -1,6 +1,12 @@
-import streamlit as st
+import io
+import os
 import re
-import PyPDF2
+import hashlib
+import streamlit as st
+from PIL import Image, ImageOps
+import fitz  # PyMuPDF
+import pytesseract
+from pytesseract import TesseractNotFoundError
 
 # 1. Required Pre-Operative Tests Checklist
 REQUIRED_TESTS = [
