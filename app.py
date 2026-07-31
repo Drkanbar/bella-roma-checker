@@ -32,25 +32,38 @@ MAX_OCR_PAGES = 20
 LARGE_FILE_MB = 12
 OCR_DPI = 200
 
-# Base tests with Default Fallback Ranges (used only if not printed in the lab report)
-BASE_TESTS = {
-    "CBC / Hemoglobin": {
-        "strong": [
-            "CBC",
-            "COMPLETE BLOOD COUNT",
-            "HEMOGLOBIN",
-            "HAEMOGLOBIN",
-            "PLATELET",
-            "PLATELETS",
-            "WBC",
-            "RBC",
-            "HEMATOCRIT",
-            "HAEMATOCRIT",
-        ],
-        "min": 12.0, "max": 16.5
-    },
+# ---------------------------------------------------------------------------
+# Required tests
+#
+# CBC and PT/INR are broken out into their real individual parameters rather
+# than one lumped "CBC / Hemoglobin" or "PT / INR" bucket. The old lumped
+# entries could only ever capture ONE value for the whole panel, so if the
+# keyword search happened to land on (say) Hemoglobin, an abnormal Hematocrit,
+# RDW, or differential count elsewhere in the same panel was silently never
+# looked at. Each parameter now gets its own check, so nothing in the panel
+# can hide behind another.
+# ---------------------------------------------------------------------------
+CBC_TESTS = {
+    "Hemoglobin":     {"strong": ["HEMOGLOBIN", "HAEMOGLOBIN"], "min": 12.0, "max": 16.5, "validate": "not_glycated"},
+    "Hematocrit":     {"strong": ["HEMATOCRIT", "HAEMATOCRIT"], "min": 36.0, "max": 46.0},
+    "RBC Count":      {"strong": ["RBC COUNT", "RBC"], "min": 4.0, "max": 5.5},
+    "WBC Count":      {"strong": ["WBC COUNT", "WBC"], "min": 4.0, "max": 11.0},
+    "Platelet Count": {"strong": ["PLATELET COUNT", "PLATELET", "PLATELETS"], "min": 150.0, "max": 400.0},
+    "MCV":            {"strong": ["MCV"], "min": 80.0, "max": 100.0},
+    "MCH":            {"strong": ["MCH"], "min": 27.0, "max": 33.0},
+    "RDW":            {"strong": ["RDW"], "min": 11.5, "max": 14.5, "validate": "not_rdw_sd"},
+    "Neutrophils %":  {"strong": ["NEUTROPHIL"], "min": 40.0, "max": 75.0},
+    "Lymphocytes %":  {"strong": ["LYMPHOCYTE"], "min": 20.0, "max": 45.0},
+    "Eosinophils %":  {"strong": ["EOSINOPHIL"], "min": 1.0, "max": 6.0},
+    "Monocytes %":    {"strong": ["MONOCYTE"], "min": 2.0, "max": 10.0},
+    "Basophils %":    {"strong": ["BASOPHIL"], "min": 0.0, "max": 2.0},
+}
+
+BASE_TESTS = {}
+BASE_TESTS.update(CBC_TESTS)
+BASE_TESTS.update({
     "Ferritin": {"strong": ["FERRITIN"], "min": 13.0, "max": 150.0},
-    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"], "min": 33.0, "max": 193.0},
+    "Iron": {"strong": ["IRON", "SERUM IRON", "TIBC", "TRANSFERRIN"], "min": 60.0, "max": 170.0},
     "SGPT / ALT": {
         "strong": ["SGPT", "ALANINE AMINOTRANSFERASE", "ALANINE TRANSAMINASE"],
         "weak": ["ALT"],
@@ -63,9 +76,13 @@ BASE_TESTS = {
     },
     "Urea": {"strong": ["UREA", "BLOOD UREA", "BUN"], "min": 15.0, "max": 45.0},
     "Creatinine": {"strong": ["CREATININE", "CREATENINE"], "min": 0.6, "max": 1.2},
-    "PT / INR": {
-        "strong": ["PROTHROMBIN TIME", "PROTHROMBIN", "INR"],
+    "Prothrombin Time (PT)": {
+        "strong": ["PROTHROMBIN TIME", "PROTHROMBIN"],
         "weak": ["PT"],
+        "min": 9.0, "max": 13.0
+    },
+    "INR": {
+        "strong": ["INTERNATIONAL NORMALIZED RATIO", "INR"],
         "min": 0.8, "max": 1.2
     },
     "APTT": {
@@ -112,7 +129,7 @@ BASE_TESTS = {
         ],
         "min": 70.0, "max": 100.0
     },
-    "TSH": {"strong": ["TSH", "THYROID STIMULATING HORMONE"], "min": 0.4, "max": 4.0},
+    "TSH": {"strong": ["THYROID STIMULATING HORMONE", "TSH"], "min": 0.4, "max": 4.0},
     "T3": {"strong": ["FREE T3", "FT3", "TRIIODOTHYRONINE"], "weak": ["T3"], "min": 2.0, "max": 4.4},
     "T4": {"strong": ["FREE T4", "FT4", "THYROXINE"], "weak": ["T4"], "min": 0.9, "max": 1.7},
     "HIV": {"strong": ["HIV", "HUMAN IMMUNODEFICIENCY"]},
@@ -125,7 +142,7 @@ BASE_TESTS = {
     "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"], "min": 3.5, "max": 5.1},
     "Calcium": {"strong": ["CALCIUM"], "min": 8.5, "max": 10.5},
     "Magnesium": {"strong": ["MAGNESIUM"], "min": 1.7, "max": 2.2},
-}
+})
 
 PREGNANCY_TEST = {
     "Beta HCG (Pregnancy Test)": {
@@ -161,50 +178,131 @@ AGE_TESTS = {
     },
 }
 
+FIELD_WORDS = r"\b(NAME|ID|NO|NUMBER|AGE|SEX|GENDER|DOB|ADDRESS|PHONE|MOBILE|REF|REFERENCE|DOCTOR|DR|CLINIC|BARCODE|SAMPLE|VISIT|FILE)\b"
+NUM_RE = re.compile(r'\b\d+\.?\d*\b')
+FLAG_TOKENS = {"H", "HH", "L", "LL"}
+
 #
 # Text normalisation & matching
 #
 def normalize(text: str) -> str:
+    """Uppercase and tidy punctuation, but KEEP line breaks intact.
+
+    The matcher below relies on line structure to localize each test's value
+    to its own row. Collapsing all whitespace (including newlines) into single
+    spaces -- which a plain ``re.sub(r"\\s+", " ", t)`` does -- merges an
+    entire multi-page report into one giant line, and every test then "sees"
+    the whole document as its search window instead of just its own row.
+    """
     t = text.upper().replace("\u00a0", " ")
     t = re.sub(r"[\u2010-\u2015\u2212]", "-", t)
     t = re.sub(r"(?<=[A-Z])\.(?=[A-Z])", "", t)
-    t = re.sub(r"\s+", " ", t)
-    return t
+    t = t.replace("\r\n", "\n").replace("\r", "\n")
+    t = re.sub(r"[ \t]+", " ", t)      # collapse horizontal whitespace only
+    t = re.sub(r" *\n *", "\n", t)     # trim spaces around line breaks
+    t = re.sub(r"\n{2,}", "\n", t)     # drop blank lines
+    return t.strip()
 
 def keyword_pattern(keyword: str) -> str:
     parts = [re.escape(p) for p in re.split(r"[\s\-.]+", keyword.strip()) if p]
     core = r"[\s\-.]*".join(parts)
     return r"(?<![A-Z0-9])" + core + r"(?![A-Z0-9])"
 
-def find_test_with_value(text: str, spec: dict, patient_age: int):
+def weak_hit_is_real(lines, idx, match) -> bool:
+    line = lines[idx]
+    tail = line[match.end(): match.end() + 80]
+    if re.match(r"\s*[:.\-]?\s*" + FIELD_WORDS + r"(?![A-Z])", tail):
+        return False
+    return bool(NUM_RE.search(tail))
+
+def not_glycated(lines, idx, match) -> bool:
+    """Reject a 'Hemoglobin'/'Haemoglobin' hit that's actually part of
+    'Glycated Hemoglobin' (HbA1c) -- a different, already separately-handled
+    test whose row otherwise looks just as valid (number + range) as the
+    real CBC Hemoglobin row, so it can win purely by appearing earlier."""
+    head = lines[idx][:match.start()]
+    return not re.search(r"(GLYCATED|GLYCOSYLATED)\s*$", head)
+
+def not_rdw_sd(lines, idx, match) -> bool:
+    """Reject 'RDW' when it's actually the start of 'RDW-SD', a separate
+    CBC parameter with its own row and reference range."""
+    tail = lines[idx][match.end(): match.end() + 4]
+    return not tail.startswith("-SD")
+
+VALIDATORS = {"not_glycated": not_glycated, "not_rdw_sd": not_rdw_sd}
+
+def _has_range(line: str) -> bool:
+    return bool(
+        re.search(r'\d+\.?\d*\s*[\-\–\—\~]+\s*\d+\.?\d*', line)
+        or re.search(r'[<≤]\s*\d+\.?\d*', line)
+    )
+
+def _line_has_number(lines, idx):
+    return 0 <= idx < len(lines) and bool(NUM_RE.search(lines[idx]))
+
+def _best_occurrence(lines, kw, numeric_test, validate=None):
+    """Scan every line mentioning kw and rank each occurrence, returning the
+    single best one -- this checks ALL occurrences in the document rather
+    than stopping at the first textual hit, which is what previously let a
+    stray mention (e.g. "HbA1c > 6.5%" inside the Glucose test's own
+    clinical-notes paragraph, or "Hematocrit > 55%" inside an interfering-
+    factors note) outrank the real result row just because it appeared first.
+
+    Tier 0: same line has a number AND a parseable reference range -- this is
+            almost certainly the actual result row.
+    Tier 1: same line has a number but no range -- still plausible, but a
+            plain narrative mention (no range attached) is far more likely
+            here than an actual reading.
+    Tier 2: a number appears 1-2 lines below -- handles investigation names
+            that wrap onto their own line before the value, e.g.
+            "APTT (ACTIVATED PARTIAL / THROMBOPLASTIN TIME) / 26.8 L seconds...".
+    Tier 3: keyword found but nothing numeric nearby at all -- last resort,
+            e.g. a bare panel heading like "(T3,T4,TSH)".
+    Ties within a tier go to the earliest occurrence in the document.
+    """
+    pat = keyword_pattern(kw)
+    best = None  # (priority, idx)
+    for idx, line in enumerate(lines):
+        m = re.search(pat, line)
+        if not m:
+            continue
+        if validate and not validate(lines, idx, m):
+            continue
+        if not numeric_test:
+            return idx  # qualitative test: first genuine mention is enough
+        if _line_has_number(lines, idx):
+            prio = 0 if _has_range(line) else 1
+        elif _line_has_number(lines, idx + 1) or _line_has_number(lines, idx + 2):
+            prio = 2
+        else:
+            prio = 3
+        if best is None or prio < best[0]:
+            best = (prio, idx)
+            if prio == 0:
+                break  # can't beat this
+    return best[1] if best else None
+
+def find_test_with_value(text: str, spec: dict):
     lines = text.split("\n")
-    matched_kw = None
-    matched_line_idx = -1
-    
-    # 1. Check strong keywords across all lines
+    numeric_test = spec.get("min") is not None or spec.get("max") is not None
+    validate = VALIDATORS.get(spec.get("validate"))
+
+    matched_kw, matched_line_idx = None, None
     for kw in spec.get("strong", []):
-        pat = keyword_pattern(kw)
-        for idx, line in enumerate(lines):
-            if re.search(pat, line):
-                matched_kw = kw
-                matched_line_idx = idx
-                break
-        if matched_kw:
+        idx = _best_occurrence(lines, kw, numeric_test, validate=validate)
+        if idx is not None:
+            matched_kw, matched_line_idx = kw, idx
             break
-            
-    # 2. Check weak keywords if no strong hit
-    if not matched_kw:
+    if matched_kw is None:
         for kw in spec.get("weak", []):
-            pat = keyword_pattern(kw)
-            for idx, line in enumerate(lines):
-                if re.search(pat, line):
-                    matched_kw = kw
-                    matched_line_idx = idx
-                    break
-            if matched_kw:
+            def wv(ls, i, m, _validate=validate):
+                return weak_hit_is_real(ls, i, m) and (not _validate or _validate(ls, i, m))
+            idx = _best_occurrence(lines, kw, numeric_test, validate=wv)
+            if idx is not None:
+                matched_kw, matched_line_idx = kw, idx
                 break
 
-    if not matched_kw or matched_line_idx == -1:
+    if matched_kw is None or matched_line_idx is None:
         return None
 
     val_info = {
@@ -215,108 +313,93 @@ def find_test_with_value(text: str, spec: dict, patient_age: int):
         "max": spec.get("max"),
         "range_source": "Default"
     }
-    
-    # Build a local search window (current line + next 2 lines)
-    window_lines = []
-    for offset in range(3):
-        if matched_line_idx + offset < len(lines):
-            clean_l = re.sub(r'^\s*\d{1,2}\s*[\.\-\)]?\s*', '', lines[matched_line_idx + offset])
-            window_lines.append(clean_l)
-    window_text = " ".join(window_lines)
 
-    # Check for explicit H / L flags in the window first
-    has_high_flag = bool(re.search(r'\b(HIGH|HI)\b|\b\sH\s|\([HH]\)|\[[HH]\]|\*[HH]\*', window_text) or re.search(r'\bH\b', window_lines[0] if window_lines else ""))
-    has_low_flag = bool(re.search(r'\b(LOW|LO)\b|\b\sL\s|\([LL]\)|\[[LL]\]|\*[LL]\*', window_text) or re.search(r'\bL\b', window_lines[0] if window_lines else ""))
+    # Locate the actual data row: the matched line itself if it carries a
+    # number, otherwise scan forward up to 2 lines (handles investigation
+    # names that wrap before the value appears, e.g. APTT).
+    value_line_idx = matched_line_idx
+    if not _line_has_number(lines, value_line_idx):
+        for offset in (1, 2):
+            if _line_has_number(lines, matched_line_idx + offset):
+                value_line_idx = matched_line_idx + offset
+                break
 
-    # 3. Search for reference range patterns in the local window
-    range_match = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~|to]+\s*(\d+\.?\d*)', window_text)
-    less_than_match = re.search(r'<\s*(\d+\.?\d*)', window_text)
-    
-    if range_match:
-        rmin = float(range_match.group(1))
-        rmax = float(range_match.group(2))
-        if rmin <= rmax:
-            val_info["min"] = rmin
-            val_info["max"] = rmax
-            val_info["range_source"] = "Report"
-    elif less_than_match:
-        val_info["min"] = 0.0
-        val_info["max"] = float(less_than_match.group(1))
-        val_info["range_source"] = "Report"
+    value_line = lines[value_line_idx] if 0 <= value_line_idx < len(lines) else ""
+    next_line = lines[value_line_idx + 1] if value_line_idx + 1 < len(lines) else ""
 
-    # 4. Clean window text from dates, times, and years
-    clean_window = re.sub(r'\b\d{1,2}[/\-\.]\d{1,2}(?:[/\-\.]\d{2,4})?\b', ' ', window_text)
-    clean_window = re.sub(r'\b20\d{2}\b', ' ', clean_window)
-    clean_window = re.sub(r'\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*[AP]M)?\b', ' ', clean_window, flags=re.IGNORECASE)
+    def ranges_in(s):
+        rm = re.search(r'(\d+\.?\d*)\s*[\-\–\—\~]+\s*(\d+\.?\d*)', s)
+        lm = re.search(r'[<≤]\s*(\d+\.?\d*)', s)
+        return rm, lm
 
-    # Find number tokens
-    number_tokens = re.findall(r'\b\d+\.?\d*\b', clean_window)
-    if number_tokens:
-        candidate_vals = []
-        for n_str in number_tokens:
-            try:
-                num = float(n_str)
-            except ValueError:
-                continue
-            
-            # Skip large IDs (>=10000), patient age, range bounds, and years
-            if (num >= 10000 and num.is_integer()) or num == float(patient_age):
-                continue
-            if 1900 <= num <= 2100 and num.is_integer():
-                continue
-            if val_info["min"] is not None and num == val_info["min"]:
-                continue
-            if val_info["max"] is not None and num == val_info["max"]:
-                continue
-            
-            candidate_vals.append((num, n_str))
-            
-        if candidate_vals:
-            ref_min = val_info.get("min")
-            ref_max = val_info.get("max")
-            
-            best_val = None
-            if has_high_flag and ref_max is not None:
-                # If explicitly flagged HIGH, look for a value greater than max or take the first non-range candidate
-                higher_vals = [c[0] for c in candidate_vals if c[0] > ref_max]
-                if higher_vals:
-                    best_val = higher_vals[0]
-            
-            if best_val is None and ref_min is not None and ref_max is not None:
-                valid_in_range = [c[0] for c in candidate_vals if ref_min <= c[0] <= ref_max]
-                if valid_in_range and not has_high_flag and not has_low_flag:
-                    best_val = valid_in_range[0]
-                else:
-                    # If flagged or out of range, pick the value outside range or first candidate
-                    out_range = [c[0] for c in candidate_vals if c[0] > ref_max or c[0] < ref_min]
-                    if out_range:
-                        best_val = out_range[0]
-                    else:
-                        midpoint = (ref_min + ref_max) / 2
-                        best_val = min(candidate_vals, key=lambda c: abs(c[0] - midpoint))[0]
-            
-            if best_val is None:
-                filtered = [c[0] for c in candidate_vals if not (c[0] < 2.0 and '.' not in c[1])]
-                best_val = filtered[0] if filtered else candidate_vals[0][0]
-                
-            val_info["value"] = best_val
-            
-        val = val_info["value"]
-        ref_min = val_info["min"]
-        ref_max = val_info["max"]
-        
-        # 5. Numerical comparison & explicit flag checks
-        if val is not None:
-            if has_high_flag:
-                val_info["status"] = "HIGH"
-            elif has_low_flag:
-                val_info["status"] = "LOW"
-            elif ref_min is not None and val < ref_min:
-                val_info["status"] = "LOW"
-            elif ref_max is not None and val > ref_max:
-                val_info["status"] = "HIGH"
+    # Look for the reference range on the value's own line first; only pull
+    # in the next line if nothing usable is on the value line itself. This
+    # keeps a neighbouring row's numbers (e.g. T4 leaking into T3) out of the
+    # picture whenever the value line already has everything it needs.
+    for search_text in (value_line, value_line + " " + next_line):
+        rm, lm = ranges_in(search_text)
+        if rm or lm:
+            if rm and lm:
+                # Whichever pattern starts earlier (closer to the value) wins.
+                # This is what keeps e.g. HbA1c's "<5.7 non-diabetic
+                # 5.7-6.4 pre-diabetic" tier label from being mistaken for the
+                # actual normal reference band.
+                use_range = rm.start() <= lm.start()
             else:
-                val_info["status"] = "NORMAL"
+                use_range = bool(rm)
+            if use_range:
+                rmin, rmax = float(rm.group(1)), float(rm.group(2))
+                if rmin <= rmax:
+                    val_info["min"], val_info["max"], val_info["range_source"] = rmin, rmax, "Report"
+                    break
+            else:
+                val_info["min"], val_info["max"], val_info["range_source"] = 0.0, float(lm.group(1)), "Report"
+                break
+
+    # Extract the value strictly from the value line itself (not a blended
+    # multi-line window) so a neighbouring test's numbers can't leak in.
+    matches = list(NUM_RE.finditer(value_line))
+    chosen = None
+    for m in matches:
+        num = float(m.group())
+        if num >= 10000 and num.is_integer():
+            continue
+        if val_info["min"] is not None and num == val_info["min"]:
+            continue
+        if val_info["max"] is not None and num == val_info["max"]:
+            continue
+        chosen = m
+        break
+    if chosen is None and matches:
+        chosen = matches[0]
+
+    if chosen is not None:
+        val = float(chosen.group())
+        val_info["value"] = val
+
+        # Flag = the token immediately following the value (e.g. "9.4 L g/dl"
+        # -> "L"), not any standalone L/H found anywhere in the surrounding
+        # text. Scanning the whole window for a bare "L" previously matched
+        # the "L" in units like mmol/L, µg/L, and U/L, which produced a false
+        # LOW on otherwise-normal results (ALT, AST, Sodium, Potassium,
+        # Ferritin, CRP all use such units).
+        tail = value_line[chosen.end():]
+        tok_m = re.match(r'\s*([A-Z]{1,2})\b', tail)
+        flag = tok_m.group(1) if tok_m and tok_m.group(1) in FLAG_TOKENS else None
+
+        ref_min, ref_max = val_info["min"], val_info["max"]
+        if flag in ("L", "LL"):
+            val_info["status"] = "LOW"
+        elif flag in ("H", "HH"):
+            val_info["status"] = "HIGH"
+        elif ref_min is not None and val < ref_min:
+            val_info["status"] = "LOW"
+        elif ref_max is not None and val > ref_max:
+            val_info["status"] = "HIGH"
+        elif ref_min is not None or ref_max is not None:
+            val_info["status"] = "NORMAL"
+        # else: no range and no flag at all -> leave as "FOUND" (a purely
+        # qualitative test such as HIV / HBsAg / HCV / Blood Group)
 
     return val_info
 
@@ -419,7 +502,7 @@ c1, c2, c3 = st.columns(3)
 with c1:
     patient_name = st.text_input("Patient name", "")
 with c2:
-    patient_age = st.number_input("Age", min_value=1, max_value=120, value=33)
+    patient_age = st.number_input("Age", min_value=1, max_value=120, value=25)
 with c3:
     patient_gender = st.selectbox("Gender", ["Female", "Male"])
 
@@ -436,7 +519,7 @@ with st.form("upload_form", clear_on_submit=False):
     pasted_text = st.text_area(
         "Or paste the report text here (fallback if your browser blocks uploads)",
         height=100,
-        placeholder="CBC, Hemoglobin 12.4 g/dL, Reference Range: 12.0 - 16.5..."
+        placeholder="Hemoglobin 12.4 g/dL 12.0 - 16.5\nPlatelets 250 10^3/uL 150 - 400\n(one result per line works best)"
     )
     analyze = st.form_submit_button("Analyze reports", type="primary", use_container_width=True)
 
@@ -487,11 +570,11 @@ if docs:
     combined = normalize("\n".join(d["text"] for d in docs.values()))
     if combined.strip():
         required = build_required_tests(int(patient_age), patient_gender)
-        
+
         found, abnormal, missing = {}, {}, []
-        
+
         for name, spec in required.items():
-            res = find_test_with_value(combined, spec, int(patient_age))
+            res = find_test_with_value(combined, spec)
             if res:
                 if res["status"] in ["HIGH", "LOW"]:
                     abnormal[name] = res
@@ -506,13 +589,13 @@ if docs:
         st.progress(done / len(required), text=f"{done} of {len(required)} required tests found")
 
         col_normal, col_abnormal, col_missing = st.columns(3)
-        
+
         with col_normal:
             st.success(f"Normal ({len(found)})")
             for name, data in found.items():
                 val_str = f" : {data['value']}" if data['value'] is not None else ""
                 st.write(f"• **{name}**{val_str}\n <span style='color:#888;font-size:0.8em'>({data['keyword']})</span>", unsafe_allow_html=True)
-                
+
         with col_abnormal:
             if abnormal:
                 st.warning(f"Out of Range ({len(abnormal)})")
