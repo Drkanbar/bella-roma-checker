@@ -26,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-BUILD = "2026-07-31-c"
+BUILD = "2026-07-31-e"
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif")
 PDF_EXT = (".pdf",)
@@ -140,11 +140,21 @@ BASE_TESTS.update({
     },
     "Hepatitis C (HCV)": {"strong": ["HEPATITIS C", "HCV", "ANTI HCV"]},
     "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"], "min": 0.0, "max": 5.0},
+})
+
+# ---------------------------------------------------------------------------
+# Electrolytes (sodium, potassium, calcium, magnesium, chloride) are no longer
+# part of the required pre-op panel, so they are not audited and will not be
+# reported as missing. The definitions are kept here, unused, so the panel can
+# be reinstated by moving any of these back into BASE_TESTS above.
+# ---------------------------------------------------------------------------
+ELECTROLYTE_TESTS_UNUSED = {
     "Sodium": {"strong": ["SODIUM", "NATRIUM"], "weak": ["NA+"], "min": 135.0, "max": 145.0},
     "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"], "min": 3.5, "max": 5.1},
+    "Chloride": {"strong": ["CHLORIDE"], "weak": ["CL-"], "min": 98.0, "max": 107.0},
     "Calcium": {"strong": ["CALCIUM"], "min": 8.5, "max": 10.5},
     "Magnesium": {"strong": ["MAGNESIUM"], "min": 1.7, "max": 2.2},
-})
+}
 
 PREGNANCY_TEST = {
     "Beta HCG (Pregnancy Test)": {
@@ -239,6 +249,7 @@ PROSE_HINTS = re.compile(
     r"IMPLICATION\w*|INTERFERING|FACTORS?|COMMENTS?|REMARKS?|THERAPY|TREATMENT|"
     r"ASSOCIATED|SUGGEST\w*|INDICAT\w+|CLINICAL|USEFUL|MONITOR\w*|ADVIS\w+|"
     r"CORRELAT\w+|CONSIDER\w*|EXERCISE|INTAKE|PLEASE|KINDLY|REPEAT\w*|"
+    r"DENOTES|SATURATION|DEFICIENC\w+|AN[AE]EMIA|PERCENT|OVERLOAD|"
     r"FOLLOW UP|DUE TO|SUCH AS|IN CASE)\b"
 )
 
@@ -261,7 +272,8 @@ def _looks_like_prose(line: str) -> bool:
         return True
     if PROSE_HINTS.search(line):
         return True
-    if line.rstrip().endswith(".") and len(line.split()) > 6:
+    # Result rows do not end in a full stop; sentences do.
+    if line.rstrip().endswith(".") and len(line.split()) >= 4:
         return True
     # Interpretation-guide labels, e.g. "IRON OVERLOAD : > 200",
     # "DEFICIENCY : < 10" -- a cutoff legend, not a measured result.
@@ -323,11 +335,23 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
                 score = 1 if _has_range(" ".join(ahead)) else 3
             else:
                 score = 7
-        at_start = m.start() <= 2
-        rank = (score, 0 if at_start else 1)
+        # A result row begins with the investigation name (possibly behind a
+        # bullet). A passing mention sits mid-sentence, and a derived row
+        # names something else first -- "ABSOLUTE LYMPHOCYTE COUNT" is a
+        # different measurement from "LYMPHOCYTE". Requiring the keyword at
+        # the start separates all three regardless of document order or how
+        # the PDF engine broke up the line.
+        lead = re.match(r"^[\s\*\-\u2022\u00b7\u25cf\u25aa]*", line).end()
+        at_start = m.start() <= lead + 1
+        rank = (
+            1 if score == 8 else 0,   # prose loses to everything
+            1 if score == 7 else 0,   # bare heading loses to any real candidate
+            0 if at_start else 1,     # row label beats mid-line mention
+            score,
+        )
         if best is None or rank < best[0]:
             best = (rank, idx)
-            if rank == (0, 0):
+            if rank == (0, 0, 0, 0):
                 break
     return best[1] if best else None
 
@@ -360,7 +384,10 @@ def find_test_with_value(text: str, spec: dict):
         "status": "FOUND",
         "min": spec.get("min"),
         "max": spec.get("max"),
-        "range_source": "Default"
+        "range_source": "Default",
+        "line_no": matched_line_idx,
+        "matched_line": lines[matched_line_idx],
+        "value_line": "",
     }
 
     # Locate the actual data row: the matched line itself if it carries a
@@ -374,6 +401,7 @@ def find_test_with_value(text: str, spec: dict):
                 break
 
     value_line = lines[value_line_idx] if 0 <= value_line_idx < len(lines) else ""
+    val_info["value_line"] = value_line
     # Under a cell-per-line layout the unit and reference range land on the
     # lines after the value, so the fallback window reaches a little further.
     next_line = " ".join(
@@ -697,6 +725,45 @@ if docs:
             file_name=f"lab_check_{(patient_name or 'patient').replace(' ', '_')}.txt",
             use_container_width=True,
         )
+
+        # ------------------------------------------------------------------
+        # Diagnostics: shows exactly which line of the extracted text each
+        # test locked onto. If a value looks wrong, this says why.
+        # ------------------------------------------------------------------
+        with st.expander("🔧 Diagnostics — copy this if a value looks wrong"):
+            all_results = {}
+            for _n, _spec in required.items():
+                all_results[_n] = find_test_with_value(combined, _spec)
+
+            diag = [
+                f"BUILD: {BUILD}",
+                f"Extracted lines: {len(combined.split(chr(10)))}",
+                f"Extracted characters: {len(combined)}",
+                f"Files: {', '.join(d['name'] for d in docs.values())}",
+                f"Notes: {'; '.join(d['note'] for d in docs.values())}",
+                "",
+                "TEST | VALUE | STATUS | RANGE | SOURCE | LINE# | MATCHED LINE",
+                "-" * 100,
+            ]
+            for _n, _r in all_results.items():
+                if _r is None:
+                    diag.append(f"{_n} | MISSING")
+                else:
+                    diag.append(
+                        f"{_n} | {_r['value']} | {_r['status']} | "
+                        f"{_r['min']}-{_r['max']} | {_r['range_source']} | "
+                        f"{_r['line_no']} | {_r['matched_line'][:80]}"
+                    )
+                    if _r["value_line"] != _r["matched_line"]:
+                        diag.append(f"      value read from -> {_r['value_line'][:80]}")
+            diag_text = "\n".join(diag)
+            st.code(diag_text, language="text")
+            st.download_button(
+                "Download diagnostics",
+                diag_text,
+                file_name="lab_check_diagnostics.txt",
+                use_container_width=True,
+            )
 
         with st.expander("View the raw extracted text"):
             for d in docs.values():
