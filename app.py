@@ -26,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-BUILD = "2026-07-31-g"
+BUILD = "2026-07-31-i"
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif")
 PDF_EXT = (".pdf",)
@@ -110,16 +110,6 @@ BASE_TESTS.update({
         ],
         "weak": ["ABO"],
     },
-    "HbA1c": {
-        "strong": [
-            "HBA1C",
-            "HB A1C",
-            "GLYCOSYLATED HEMOGLOBIN",
-            "GLYCATED HEMOGLOBIN",
-            "GLYCATED HAEMOGLOBIN",
-        ],
-        "min": 4.0, "max": 5.6
-    },
     "RBS / Glucose": {
         "strong": [
             "GLUCOSE",
@@ -142,12 +132,22 @@ BASE_TESTS.update({
 })
 
 # ---------------------------------------------------------------------------
-# CRP and the electrolytes (sodium, potassium, calcium, magnesium, chloride)
-# are no longer part of the required pre-op panel, so they are not audited and
+# HbA1c, CRP and the electrolytes (sodium, potassium, calcium, magnesium,
+# chloride) are no longer part of the required pre-op panel, so they are not audited and
 # will not be reported as missing. The definitions are kept here, unused, so
 # any of them can be reinstated by moving it back into BASE_TESTS above.
 # ---------------------------------------------------------------------------
 UNUSED_TESTS = {
+    "HbA1c": {
+        "strong": [
+            "HBA1C",
+            "HB A1C",
+            "GLYCOSYLATED HEMOGLOBIN",
+            "GLYCATED HEMOGLOBIN",
+            "GLYCATED HAEMOGLOBIN",
+        ],
+        "min": 4.0, "max": 5.6
+    },
     "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"], "min": 0.0, "max": 5.0},
     "Sodium": {"strong": ["SODIUM", "NATRIUM"], "weak": ["NA+"], "min": 135.0, "max": 145.0},
     "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"], "min": 3.5, "max": 5.1},
@@ -191,7 +191,18 @@ AGE_TESTS = {
 }
 
 FIELD_WORDS = r"\b(NAME|ID|NO|NUMBER|AGE|SEX|GENDER|DOB|ADDRESS|PHONE|MOBILE|REF|REFERENCE|DOCTOR|DR|CLINIC|BARCODE|SAMPLE|VISIT|FILE)\b"
-NUM_RE = re.compile(r'\b\d+\.?\d*\b')
+# A number must not be preceded by a letter -- otherwise the digits inside
+# investigation names ("(T3)", "P24 ANTIGEN", "HB A1C") are read as results.
+# Trailing letters ARE allowed, so a flag fused to the value ("9.4L") still
+# yields 9.4 rather than 9.
+NUM_RE = re.compile(
+    r'(?<![A-Za-z\d.])\d{1,3}(?:,\d{3})+(?:\.\d+)?'
+    r'|(?<![A-Za-z\d.])\d+(?:\.\d+)?'
+)
+
+def _num(m) -> float:
+    """Value of a NUM_RE match, tolerating thousands separators."""
+    return float(m.group().replace(",", ""))
 FLAG_TOKENS = {"H", "HH", "L", "LL"}
 
 #
@@ -442,15 +453,31 @@ def find_test_with_value(text: str, spec: dict):
 
     # Extract the value strictly from the value line itself (not a blended
     # multi-line window) so a neighbouring test's numbers can't leak in.
+    # Exclude the reference range by POSITION, not by value: a result that
+    # happens to sit exactly on a boundary (e.g. "WBC COUNT 4 10^3/uL 4-11")
+    # is a legitimate reading and must not be discarded.
     matches = list(NUM_RE.finditer(value_line))
+    excluded = []
+    rng_on_value_line, lt_on_value_line = ranges_in(value_line)
+    if val_info["range_source"] == "Report":
+        if rng_on_value_line:
+            excluded.append(rng_on_value_line.span())
+        if lt_on_value_line:
+            excluded.append(lt_on_value_line.span())
+    # Unit expressions like "10^3/uL" or "10^6/uL" carry digits that are not
+    # results; skip numbers that are part of one.
+    for um in re.finditer(r'10\s*\^?\s*\d+', value_line):
+        excluded.append(um.span())
+
+    def _inside_excluded(m):
+        return any(a <= m.start() < b for a, b in excluded)
+
     chosen = None
     for m in matches:
-        num = float(m.group())
+        if _inside_excluded(m):
+            continue
+        num = _num(m)
         if num >= 10000 and num.is_integer():
-            continue
-        if val_info["min"] is not None and num == val_info["min"]:
-            continue
-        if val_info["max"] is not None and num == val_info["max"]:
             continue
         chosen = m
         break
@@ -458,7 +485,7 @@ def find_test_with_value(text: str, spec: dict):
         chosen = matches[0]
 
     if chosen is not None:
-        val = float(chosen.group())
+        val = _num(chosen)
         val_info["value"] = val
 
         # Flag = the token immediately following the value (e.g. "9.4 L g/dl"
