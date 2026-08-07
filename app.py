@@ -26,7 +26,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-BUILD = "2026-07-31-e"
+BUILD = "2026-07-31-g"
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tif", ".tiff", ".heic", ".heif")
 PDF_EXT = (".pdf",)
@@ -139,16 +139,16 @@ BASE_TESTS.update({
         "strong": ["HBSAG", "HBS AG", "HEPATITIS B SURFACE", "HEPATITIS B"]
     },
     "Hepatitis C (HCV)": {"strong": ["HEPATITIS C", "HCV", "ANTI HCV"]},
-    "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"], "min": 0.0, "max": 5.0},
 })
 
 # ---------------------------------------------------------------------------
-# Electrolytes (sodium, potassium, calcium, magnesium, chloride) are no longer
-# part of the required pre-op panel, so they are not audited and will not be
-# reported as missing. The definitions are kept here, unused, so the panel can
-# be reinstated by moving any of these back into BASE_TESTS above.
+# CRP and the electrolytes (sodium, potassium, calcium, magnesium, chloride)
+# are no longer part of the required pre-op panel, so they are not audited and
+# will not be reported as missing. The definitions are kept here, unused, so
+# any of them can be reinstated by moving it back into BASE_TESTS above.
 # ---------------------------------------------------------------------------
-ELECTROLYTE_TESTS_UNUSED = {
+UNUSED_TESTS = {
+    "CRP": {"strong": ["CRP", "C REACTIVE PROTEIN"], "min": 0.0, "max": 5.0},
     "Sodium": {"strong": ["SODIUM", "NATRIUM"], "weak": ["NA+"], "min": 135.0, "max": 145.0},
     "Potassium": {"strong": ["POTASSIUM", "KALIUM"], "weak": ["K+"], "min": 3.5, "max": 5.1},
     "Chloride": {"strong": ["CHLORIDE"], "weak": ["CL-"], "min": 98.0, "max": 107.0},
@@ -305,7 +305,7 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
     2  number on the line, no range
     3  name on its own line with a number below, no range
     7  keyword present but nothing numeric nearby (bare panel heading)
-    8  prose / clinical-notes sentence -- last resort only
+    Prose / clinical-notes sentences are excluded entirely, never ranked.
     Ties go to the earliest occurrence in the document.
     """
     pat = keyword_pattern(kw)
@@ -316,15 +316,17 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
             continue
         if validate and not validate(lines, idx, m):
             continue
+        if _looks_like_prose(line):
+            # A clinical-notes sentence is NEVER a result. Skipping it
+            # outright -- rather than ranking it last -- means that when a
+            # test is genuinely absent from the report, it is reported as
+            # MISSING instead of silently taking a number out of a sentence
+            # that merely mentions the test. A missing test the clinician
+            # can see is far safer than a fabricated value they cannot.
+            continue
         if not numeric_test:
-            if _looks_like_prose(line) and best is not None:
-                continue
-            if not _looks_like_prose(line):
-                return idx
-            score = 8
-        elif _looks_like_prose(line):
-            score = 8
-        elif _line_has_number(lines, idx):
+            return idx
+        if _line_has_number(lines, idx):
             score = 0 if _has_range(line) else 2
         else:
             # Investigation name on its own line -- either a wrapped name
@@ -344,14 +346,13 @@ def _best_occurrence(lines, kw, numeric_test, validate=None):
         lead = re.match(r"^[\s\*\-\u2022\u00b7\u25cf\u25aa]*", line).end()
         at_start = m.start() <= lead + 1
         rank = (
-            1 if score == 8 else 0,   # prose loses to everything
             1 if score == 7 else 0,   # bare heading loses to any real candidate
             0 if at_start else 1,     # row label beats mid-line mention
             score,
         )
         if best is None or rank < best[0]:
             best = (rank, idx)
-            if rank == (0, 0, 0, 0):
+            if rank == (0, 0, 0):
                 break
     return best[1] if best else None
 
